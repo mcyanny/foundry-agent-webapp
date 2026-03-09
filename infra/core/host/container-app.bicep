@@ -13,6 +13,7 @@ param cpu string = '0.5'
 param memory string = '1Gi'
 param minReplicas int = 0
 param maxReplicas int = 3
+param userAssignedIdentityId string
 
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: containerRegistryName
@@ -23,7 +24,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   location: location
   tags: tags
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${userAssignedIdentityId}': {}
+    }
   }
   properties: {
     managedEnvironmentId: containerAppsEnvironmentId
@@ -38,14 +42,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server: containerRegistry.properties.loginServer
-          username: containerRegistry.listCredentials().username
-          passwordSecretRef: 'registry-password'
-        }
-      ]
-      secrets: [
-        {
-          name: 'registry-password'
-          value: containerRegistry.listCredentials().passwords[0].value
+          identity: !empty(userAssignedIdentityId) ? userAssignedIdentityId : 'system'
         }
       ]
     }
@@ -93,4 +90,3 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 output id string = containerApp.id
 output name string = containerApp.name
 output fqdn string = enableIngress ? containerApp.properties.configuration.ingress.fqdn : ''
-output identityPrincipalId string = containerApp.identity.principalId

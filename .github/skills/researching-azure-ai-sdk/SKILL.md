@@ -17,7 +17,7 @@ description: Provides research patterns for Foundry Agent Service SDK. Use when 
 
 ### Delegation Pattern
 
-```
+```text
 runSubagent(
   prompt: "RESEARCH task - do NOT write code.
     
@@ -64,7 +64,7 @@ The Foundry Agent Service SDK has **two API surfaces** for agents:
 
 **This project uses v2 Agents API** for human-readable agent IDs.
 
-```
+```text
 Azure.AI.Projects (Main Entry Point)
 ├── AIProjectClient
 │   ├── .Agents.GetAgentAsync() → AgentRecord (v2 Agents API)
@@ -170,7 +170,7 @@ When implementing new UI features, check these sources in order:
 
 Use GitHub search to find usage examples:
 
-```
+```text
 # Find streaming patterns
 "StreamingResponseOutputTextDeltaUpdate language:csharp"
 
@@ -183,19 +183,19 @@ Use GitHub search to find usage examples:
 
 ## Current SDK Packages
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `Azure.AI.Projects` | 1.2.0-beta.5 | Main entry point, `AIProjectClient`, v2 Agents API, Responses API |
-| `Azure.Identity` | 1.17.1 | Authentication (`AzureDeveloperCliCredential`, `ManagedIdentityCredential`) |
-| `Microsoft.Identity.Web` | 4.3.0 | JWT Bearer authentication for API |
+| Package | Purpose |
+|---------|---------|
+| `Azure.AI.Projects` | Main entry point, `AIProjectClient`, v2 Agents API, Responses API |
+| `Azure.Identity` | Authentication (`AzureDeveloperCliCredential`, `ManagedIdentityCredential`) |
+| `Microsoft.Identity.Web` | JWT Bearer authentication for API |
 
-**Note**: This project uses `Azure.AI.Projects` beta for v2 Agents API access (`AIProjectClient.Agents`). The stable version does not include the v2 Agents API.
+**Note**: Check `WebApp.Api.csproj` for current versions. This project requires `Azure.AI.Projects` with v2 Agents API support (`AIProjectClient.Agents`).
 
 **Sub-namespaces available** (not separate packages):
 - `Azure.AI.Projects.OpenAI` - Responses API, conversations
 - `OpenAI.Responses` - Streaming types
 
-**Available Package**: `Microsoft.Agents.AI.AzureAI` v1.0.0-rc1 supports v2 Agents API via `AIProjectClient` extension methods. See "Microsoft Agent Framework" section below for evaluation notes.
+**Available Package**: `Microsoft.Agents.AI.AzureAI` (prerelease) supports v2 Agents API via `AIProjectClient` extension methods. See "Microsoft Agent Framework" section below.
 
 **Key Resources**:
 - NuGet (Azure.AI.Projects): https://www.nuget.org/packages/Azure.AI.Projects
@@ -203,6 +203,7 @@ Use GitHub search to find usage examples:
 - v2 Migration Guide: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/how-to/migrate
 - API Reference: https://learn.microsoft.com/en-us/dotnet/api/azure.ai.projects
 - Product Docs: https://learn.microsoft.com/azure/ai-studio/
+- Infrastructure Bicep Templates: https://github.com/microsoft-foundry/foundry-samples/tree/main/infrastructure/infrastructure-setup-bicep
 
 ## Official Azure AI Foundry Agent Service Documentation
 
@@ -268,7 +269,7 @@ await foreach (var update in responsesClient.CreateResponseStreamingAsync(...))
 
 ## Microsoft Agent Framework (Used — Hybrid Approach)
 
-**Package**: `Microsoft.Agents.AI.AzureAI` v1.0.0-rc1
+**Package**: `Microsoft.Agents.AI.AzureAI` (see `WebApp.Api.csproj` for version)
 
 **Status**: ✅ **Installed and active**. Agent Framework supports v2 Agents API via `AIProjectClient` extension methods.
 
@@ -354,21 +355,13 @@ Track progress at: https://github.com/microsoft/Agents-for-net
 
 ## Migration Notes
 
-The SDK has evolved from connection string-based auth to project endpoint:
+`AIProjectClient` requires a project endpoint URI (not a connection string):
 
-**Old pattern (deprecated)**:
 ```csharp
-// DON'T USE - connection string deprecated in v1.0.0-beta.9+
-var projectClient = new AIProjectClient(connectionString, new DefaultAzureCredential());
-```
-
-**New pattern (current)**:
-```csharp
-// USE THIS - project endpoint
 var projectClient = new AIProjectClient(new Uri(projectEndpoint), new DefaultAzureCredential());
 ```
 
-See: https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/ai/Azure.AI.Projects/AGENTS_MIGRATION_GUIDE.md
+Connection-string constructors are deprecated. See: https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/ai/Azure.AI.Projects/AGENTS_MIGRATION_GUIDE.md
 
 ## Additional SDK Resources
 
@@ -386,7 +379,7 @@ Type definitions live in these repos—read them directly:
 
 Search across all .NET codebases for real-world usage:
 
-```
+```text
 "ProjectResponsesClient CreateResponseStreamingAsync" language:csharp
 "StreamingResponseOutputTextDeltaUpdate" language:csharp
 ```

@@ -37,6 +37,9 @@ builder.AddServiceDefaults();
 // Add ProblemDetails service for standardized RFC 7807 error responses
 builder.Services.AddProblemDetails();
 
+// Register IHttpContextAccessor for services that need access to the current HTTP request
+builder.Services.AddHttpContextAccessor();
+
 // Configure CORS for local development and production
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
     ?? new[] { "http://localhost:8080" };
@@ -100,12 +103,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     {
         builder.Configuration.Bind("AzureAd", options);
         var configuredClientId = builder.Configuration["AzureAd:ClientId"];
+        var backendClientId = builder.Configuration["ENTRA_BACKEND_CLIENT_ID"];
 
-        options.TokenValidationParameters.ValidAudiences = new[]
+        // When OBO is enabled, tokens are scoped to the backend API app
+        var audiences = new List<string> { configuredClientId!, $"api://{configuredClientId}" };
+        if (!string.IsNullOrEmpty(backendClientId))
         {
-            configuredClientId,
-            $"api://{configuredClientId}"
-        };
+            audiences.Add(backendClientId);
+            audiences.Add($"api://{backendClientId}");
+        }
+        options.TokenValidationParameters.ValidAudiences = audiences;
 
         options.TokenValidationParameters.NameClaimType = ClaimTypes.Name;
         options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
@@ -228,6 +235,9 @@ app.MapPost("/api/chat/stream", async (
     }
     catch (Exception ex)
     {
+        var logger = httpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Chat stream error: {Message}", ex.Message);
+        
         var errorResponse = ErrorResponseFactory.CreateFromException(
             ex, 
             500, 
@@ -244,9 +254,8 @@ app.MapPost("/api/chat/stream", async (
 
 static async Task WriteConversationIdEvent(HttpResponse response, string conversationId, CancellationToken ct)
 {
-    await response.WriteAsync(
-        $"data: {{\"type\":\"conversationId\",\"conversationId\":\"{conversationId}\"}}\n\n",
-        ct);
+    var json = System.Text.Json.JsonSerializer.Serialize(new { type = "conversationId", conversationId });
+    await response.WriteAsync($"data: {json}\n\n", ct);
     await response.Body.FlushAsync(ct);
 }
 
@@ -288,7 +297,8 @@ static async Task WriteMcpApprovalRequestEvent(HttpResponse response, WebApp.Api
             id = approval.Id,
             toolName = approval.ToolName,
             serverLabel = approval.ServerLabel,
-            arguments = approval.Arguments
+            arguments = approval.Arguments,
+            previousResponseId = approval.PreviousResponseId
         }
     });
     await response.WriteAsync($"data: {json}\n\n", ct);
@@ -384,6 +394,99 @@ app.MapGet("/api/agent/info", async (
 })
 .RequireAuthorization(ScopePolicyName)
 .WithName("GetAgentInfo");
+
+// List conversations
+app.MapGet("/api/conversations", async (
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    int? limit,
+    CancellationToken cancellationToken) =>
+{
+    // MI mode: conversations are agent-scoped, not user-scoped.
+    // All authenticated users see all conversations for this agent.
+    // This is by-design — OBO mode (ENTRA_BACKEND_CLIENT_ID set) scopes per-user.
+    try
+    {
+        var pageSize = Math.Clamp(limit ?? 20, 1, 100);
+        var conversations = await agentService.ListConversationsAsync(pageSize, cancellationToken);
+        var hasMore = conversations.Count > pageSize;
+        if (hasMore)
+            conversations = conversations.Take(pageSize).ToList();
+        return Results.Ok(new { conversations, hasMore });
+    }
+    catch (Exception ex)
+    {
+        var errorResponse = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(
+            title: errorResponse.Title,
+            detail: errorResponse.Detail,
+            statusCode: errorResponse.Status,
+            extensions: errorResponse.Extensions
+        );
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("ListConversations");
+
+// Get conversation messages
+app.MapGet("/api/conversations/{conversationId}/messages", async (
+    string conversationId,
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var messages = await agentService.GetConversationMessagesAsync(conversationId, cancellationToken);
+        return Results.Ok(messages);
+    }
+    catch (Exception ex)
+    {
+        var errorResponse = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(
+            title: errorResponse.Title,
+            detail: errorResponse.Detail,
+            statusCode: errorResponse.Status,
+            extensions: errorResponse.Extensions
+        );
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("GetConversationMessages");
+
+// Delete conversation
+app.MapDelete("/api/conversations/{conversationId}", async (
+    string conversationId,
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await agentService.DeleteConversationAsync(conversationId, cancellationToken);
+        return Results.NoContent();
+    }
+    catch (NotSupportedException)
+    {
+        return Results.Problem(
+            title: "Not Implemented",
+            detail: "Conversation deletion is not yet supported by the Azure.AI.Projects SDK.",
+            statusCode: 501
+        );
+    }
+    catch (Exception ex)
+    {
+        var errorResponse = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(
+            title: errorResponse.Title,
+            detail: errorResponse.Detail,
+            statusCode: errorResponse.Status,
+            extensions: errorResponse.Extensions
+        );
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("DeleteConversation");
 
 // Fallback route for SPA - serve index.html for any non-API routes
 app.MapFallbackToFile("index.html");

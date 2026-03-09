@@ -10,6 +10,8 @@ Write-Host "Pre-Deploy: Building Container Image" -ForegroundColor Cyan
 # Get required values
 $clientId = azd env get-value ENTRA_SPA_CLIENT_ID 2>$null
 $tenantId = azd env get-value ENTRA_TENANT_ID 2>$null
+$backendClientId = azd env get-value ENTRA_BACKEND_CLIENT_ID 2>$null
+$appInsightsConnStr = (azd env get-value APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING 2>&1) | Where-Object { $_ -notmatch 'ERROR' } | Select-Object -First 1
 $acrName = azd env get-value AZURE_CONTAINER_REGISTRY_NAME 2>$null
 $resourceGroup = azd env get-value AZURE_RESOURCE_GROUP_NAME 2>$null
 $containerApp = azd env get-value AZURE_CONTAINER_APP_NAME 2>$null
@@ -42,10 +44,15 @@ Push-Location $projectRoot
 try {
     if ($dockerAvailable) {
         Write-Host "Building with local Docker..." -ForegroundColor Cyan
-        docker build --platform linux/amd64 `
-            --build-arg ENTRA_SPA_CLIENT_ID=$clientId `
-            --build-arg ENTRA_TENANT_ID=$tenantId `
-            -f deployment/docker/frontend.Dockerfile -t $imageName . 2>&1 | Out-Host
+        $buildArgs = @(
+            "--platform", "linux/amd64",
+            "--build-arg", "ENTRA_SPA_CLIENT_ID=$clientId",
+            "--build-arg", "ENTRA_TENANT_ID=$tenantId"
+        )
+        if ($backendClientId) { $buildArgs += @("--build-arg", "ENTRA_BACKEND_CLIENT_ID=$backendClientId") }
+        if ($appInsightsConnStr) { $buildArgs += @("--build-arg", "APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING=$appInsightsConnStr") }
+        $buildArgs += @("-f", "deployment/docker/frontend.Dockerfile", "-t", $imageName, ".")
+        docker build @buildArgs 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Docker build failed" }
         
         Write-Host "Pushing to ACR..." -ForegroundColor Cyan
@@ -54,9 +61,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Docker push failed" }
     } else {
         Write-Host "Using ACR cloud build (3-5 min)..." -ForegroundColor Yellow
+        $acrBuildArgs = @("--build-arg", "ENTRA_SPA_CLIENT_ID=$clientId", "--build-arg", "ENTRA_TENANT_ID=$tenantId")
+        if ($backendClientId) { $acrBuildArgs += @("--build-arg", "ENTRA_BACKEND_CLIENT_ID=$backendClientId") }
+        if ($appInsightsConnStr) { $acrBuildArgs += @("--build-arg", "APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING=$appInsightsConnStr") }
         $buildOutput = az acr build --registry $acrName --image "web:$imageTag" `
-            --build-arg ENTRA_SPA_CLIENT_ID=$clientId `
-            --build-arg ENTRA_TENANT_ID=$tenantId `
+            @acrBuildArgs `
             --file deployment/docker/frontend.Dockerfile . `
             --no-logs --only-show-errors 2>&1
 

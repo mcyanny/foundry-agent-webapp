@@ -44,6 +44,12 @@ const logStateChange = (action: AppAction, prevState: AppState, nextState: AppSt
   if (prevState.ui.chatInputEnabled !== nextState.ui.chatInputEnabled) {
     changes['ui.chatInputEnabled'] = `${prevState.ui.chatInputEnabled} → ${nextState.ui.chatInputEnabled}`;
   }
+  if (prevState.conversations.sidebarOpen !== nextState.conversations.sidebarOpen) {
+    changes['conversations.sidebarOpen'] = `${prevState.conversations.sidebarOpen} → ${nextState.conversations.sidebarOpen}`;
+  }
+  if (prevState.conversations.list.length !== nextState.conversations.list.length) {
+    changes['conversations.list.length'] = `${prevState.conversations.list.length} → ${nextState.conversations.list.length}`;
+  }
   
   if (Object.keys(changes).length) {
     devLogger.log('Changes:', changes);

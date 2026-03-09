@@ -79,7 +79,7 @@ if ([string]::IsNullOrWhiteSpace($existingEndpoint)) {
             Write-Host "[!] Multiple AI Foundry resources found:" -ForegroundColor Yellow
             for ($i = 0; $i -lt $resources.Count; $i++) {
                 $r = $resources[$i]
-                Write-Host "    [$($i+1)] $($r.name)  (RG: $($r.resourceGroup))" -ForegroundColor White
+                Write-Host "    [$($i+1)] $($r.name)  (RG: $($r.resourceGroup), Region: $($r.location))" -ForegroundColor White
             }
             
             # Check if running interactively
@@ -106,8 +106,22 @@ if ([string]::IsNullOrWhiteSpace($existingEndpoint)) {
     
     Write-Host "[OK] Using AI Foundry resource: $($selected.name)" -ForegroundColor Green
     
+    # Region safety check: warn if AI Foundry resource is in a different region than deployment
+    $deploymentLocation = (azd env get-value AZURE_LOCATION 2>&1) | Where-Object { $_ -notmatch 'ERROR' } | Select-Object -First 1
+    $aiFoundryLocation = $selected.location
+    if (-not [string]::IsNullOrWhiteSpace($deploymentLocation) -and -not [string]::IsNullOrWhiteSpace($aiFoundryLocation)) {
+        if ($deploymentLocation.Replace(' ','').ToLower() -ne $aiFoundryLocation.Replace(' ','').ToLower()) {
+            Write-Host "[WARN] Region mismatch: deploying to '$deploymentLocation' but AI Foundry is in '$aiFoundryLocation'" -ForegroundColor Yellow
+            Write-Host "  The user-assigned MI has isolationScope=Regional. Cross-region RBAC assignments" -ForegroundColor Yellow
+            Write-Host "  still work, but for best resilience consider co-locating resources." -ForegroundColor Yellow
+            Write-Host "  To change: azd env set AZURE_LOCATION $aiFoundryLocation" -ForegroundColor Gray
+        } else {
+            Write-Host "[OK] Region match: $deploymentLocation" -ForegroundColor Green
+        }
+    }
+    
     # Get first project
-    $projectsUrl = "https://management.azure.com$($selected.id)/projects?api-version=2025-04-01-preview"
+    $projectsUrl = "https://management.azure.com$($selected.id)/projects?api-version=2025-12-01"
     $projects = az rest --method get --url $projectsUrl --query "value" 2>$null | ConvertFrom-Json
     if (-not $projects -or $projects.Count -eq 0) {
         Write-Host "[ERROR] No projects found. Create one at https://ai.azure.com" -ForegroundColor Red
@@ -118,6 +132,7 @@ if ([string]::IsNullOrWhiteSpace($existingEndpoint)) {
     $aiEndpoint = "https://$($selected.name).services.ai.azure.com/api/projects/$projectName"
     azd env set AI_FOUNDRY_RESOURCE_GROUP $selected.resourceGroup
     azd env set AI_FOUNDRY_RESOURCE_NAME $selected.name
+    azd env set AI_FOUNDRY_LOCATION $selected.location
     azd env set AI_AGENT_ENDPOINT $aiEndpoint
     
     Write-Host "[OK] Endpoint: $aiEndpoint" -ForegroundColor Green

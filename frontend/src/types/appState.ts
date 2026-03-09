@@ -5,6 +5,17 @@ import type { AppError } from './errors';
 // Re-export types for convenience
 export type { IChatItem, IUsageInfo, IAnnotation, IMcpApprovalRequest };
 
+export interface ConversationSummary {
+  id: string;
+  title: string | null;
+  createdAt: number;
+}
+
+export interface ConversationMessageInfo {
+  role: string;
+  content: string;
+}
+
 /**
  * Central application state structure
  * All application state flows through this single source of truth
@@ -25,6 +36,14 @@ export interface AppState {
     error: AppError | null; // Enhanced error object
     streamingMessageId?: string; // Which message is actively streaming
   };
+
+  // Conversation history state
+  conversations: {
+    list: ConversationSummary[];
+    isLoading: boolean;
+    sidebarOpen: boolean;
+    hasMore: boolean;
+  };
   
   // UI coordination state
   ui: {
@@ -43,16 +62,26 @@ export type AppAction =
   
   // Chat actions
   | { type: 'CHAT_SEND_MESSAGE'; message: IChatItem }
+  | { type: 'CHAT_LOAD_MESSAGES'; messages: IChatItem[] }
   | { type: 'CHAT_START_STREAM'; conversationId?: string; messageId: string }
   | { type: 'CHAT_STREAM_CHUNK'; messageId: string; content: string }
   | { type: 'CHAT_STREAM_ANNOTATIONS'; messageId: string; annotations: IAnnotation[] }
   | { type: 'CHAT_MCP_APPROVAL_REQUEST'; messageId: string; approvalRequest: IMcpApprovalRequest; previousResponseId: string | null }
+  | { type: 'CHAT_MCP_APPROVAL_RESOLVED'; approvalRequestId: string; resolved?: 'approved' | 'rejected' }
   | { type: 'CHAT_STREAM_COMPLETE'; usage: IUsageInfo }
   | { type: 'CHAT_CANCEL_STREAM' }
   | { type: 'CHAT_ERROR'; error: AppError } // Enhanced error object
   | { type: 'CHAT_CLEAR_ERROR' } // Clear error state
   | { type: 'CHAT_CLEAR' }
-  | { type: 'CHAT_ADD_ASSISTANT_MESSAGE'; messageId: string };
+  | { type: 'CHAT_ADD_ASSISTANT_MESSAGE'; messageId: string }
+  | { type: 'CHAT_LOAD_CONVERSATION'; conversationId: string; messages: IChatItem[] }
+
+  // Conversation history actions
+  | { type: 'CONVERSATIONS_SET_LIST'; conversations: ConversationSummary[]; hasMore: boolean; append?: boolean }
+  | { type: 'CONVERSATIONS_LOADING' }
+  | { type: 'CONVERSATIONS_LOADING_DONE' }
+  | { type: 'CONVERSATIONS_TOGGLE_SIDEBAR' }
+  | { type: 'CONVERSATIONS_REMOVE'; conversationId: string };
 
 /**
  * Initial state for the application
@@ -69,6 +98,12 @@ export const initialAppState: AppState = {
     currentConversationId: null,
     error: null,
     streamingMessageId: undefined,
+  },
+  conversations: {
+    list: [],
+    isLoading: false,
+    sidebarOpen: false,
+    hasMore: false,
   },
   ui: {
     chatInputEnabled: true,

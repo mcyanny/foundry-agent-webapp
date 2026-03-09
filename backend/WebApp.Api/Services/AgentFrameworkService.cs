@@ -5,6 +5,8 @@ using Azure.Identity;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OpenAI.Responses;
+using Microsoft.Identity.Client;
+using Microsoft.Identity.Web;
 using System.Runtime.CompilerServices;
 using WebApp.Api.Models;
 
@@ -22,22 +24,37 @@ namespace WebApp.Api.Services;
 /// </remarks>
 public class AgentFrameworkService : IDisposable
 {
-    private readonly AIProjectClient _projectClient;
+    private readonly string _agentEndpoint;
     private readonly string _agentId;
     private readonly ILogger<AgentFrameworkService> _logger;
-    private ChatClientAgent? _cachedAgent;
-    private AgentMetadataResponse? _cachedMetadata;
-    private readonly SemaphoreSlim _agentLock = new(1, 1);
+    private readonly IHttpContextAccessor? _httpContextAccessor;
+    private readonly string? _backendClientId;
+    private readonly string? _tenantId;
+    private readonly string? _managedIdentityClientId;
+    private readonly bool _useObo;
+    private readonly TokenCredential _fallbackCredential;
+
+    // Agent metadata cache (static - shared across requests)
+    private static ChatClientAgent? s_cachedAgent;
+    private static AgentMetadataResponse? s_cachedMetadata;
+    private static readonly SemaphoreSlim s_agentLock = new(1, 1);
+    // MI assertion cache (static - user-independent, safe to share across requests)
+    private static ManagedIdentityClientAssertion? s_miAssertion;
+
+    // Per-request project client
+    private AIProjectClient? _projectClient;
     private bool _disposed = false;
     private ResponseTokenUsage? _lastUsage;
 
     public AgentFrameworkService(
         IConfiguration configuration,
-        ILogger<AgentFrameworkService> logger)
+        ILogger<AgentFrameworkService> logger,
+        IHttpContextAccessor? httpContextAccessor = null)
     {
         _logger = logger;
+        _httpContextAccessor = httpContextAccessor;
 
-        var endpoint = configuration["AI_AGENT_ENDPOINT"]
+        _agentEndpoint = configuration["AI_AGENT_ENDPOINT"]
             ?? throw new InvalidOperationException("AI_AGENT_ENDPOINT is not configured");
 
         _agentId = configuration["AI_AGENT_ID"]
@@ -45,28 +62,126 @@ public class AgentFrameworkService : IDisposable
 
         _logger.LogDebug(
             "Initializing AgentFrameworkService: endpoint={Endpoint}, agentId={AgentId}", 
-            endpoint, 
+            _agentEndpoint, 
             _agentId);
 
-        TokenCredential credential;
+        _backendClientId = configuration["ENTRA_BACKEND_CLIENT_ID"];
+        _tenantId = configuration["ENTRA_TENANT_ID"] ?? configuration["AzureAd:TenantId"];
+        // User-assigned MI client ID — used for MI-only mode and as FIC assertion in OBO mode
+        _managedIdentityClientId = configuration["MANAGED_IDENTITY_CLIENT_ID"]
+            ?? configuration["OBO_MANAGED_IDENTITY_CLIENT_ID"]; // backward compat
+
         var environment = configuration["ASPNETCORE_ENVIRONMENT"] ?? "Production";
 
+        // Determine if OBO is available
+        _useObo = !string.IsNullOrEmpty(_backendClientId)
+                  && !string.IsNullOrEmpty(_tenantId)
+                  && environment != "Development";
+
+        // Create credential for non-OBO operations (agent metadata cache, MI-only mode)
         if (environment == "Development")
         {
             _logger.LogInformation("Development: Using ChainedTokenCredential (AzureCli -> AzureDeveloperCli)");
-            credential = new ChainedTokenCredential(
+            _fallbackCredential = new ChainedTokenCredential(
                 new AzureCliCredential(),
                 new AzureDeveloperCliCredential()
             );
         }
+        else if (!string.IsNullOrEmpty(_managedIdentityClientId))
+        {
+            _logger.LogInformation("Production: Using user-assigned ManagedIdentityCredential: {MiClientId}", _managedIdentityClientId);
+            _fallbackCredential = new ManagedIdentityCredential(_managedIdentityClientId);
+        }
         else
         {
             _logger.LogInformation("Production: Using ManagedIdentityCredential (system-assigned)");
-            credential = new ManagedIdentityCredential();
+            _fallbackCredential = new ManagedIdentityCredential();
         }
 
-        _projectClient = new AIProjectClient(new Uri(endpoint), credential);
+        if (_useObo)
+        {
+            if (string.IsNullOrEmpty(_managedIdentityClientId))
+            {
+                throw new InvalidOperationException(
+                    "OBO mode requires MANAGED_IDENTITY_CLIENT_ID to be set for the FIC assertion. " +
+                    "This is the user-assigned managed identity that acts as the federated credential.");
+            }
+            _logger.LogInformation("OBO mode enabled: backendClientId={BackendClientId}. All API calls use user-delegated identity.", _backendClientId);
+
+            // Initialize MI assertion eagerly — avoids thread-safety issues with lazy init
+            // in CreateOboCredential(). Safe here because the constructor runs once per scoped instance.
+            s_miAssertion ??= new ManagedIdentityClientAssertion(managedIdentityClientId: _managedIdentityClientId);
+
+            // No cached project client in OBO mode — created per-request with user's token
+        }
+        else
+        {
+            _logger.LogInformation("MI mode: using managed identity for all API calls");
+            _projectClient = new AIProjectClient(new Uri(_agentEndpoint), _fallbackCredential);
+        }
+
         _logger.LogInformation("AIProjectClient initialized successfully");
+    }
+
+    /// <summary>
+    /// Get AIProjectClient — OBO mode creates per-request with user's identity, MI mode uses cached client.
+    /// </summary>
+    private AIProjectClient GetProjectClient()
+    {
+        // MI mode: return cached client
+        if (!_useObo)
+        {
+            _projectClient ??= new AIProjectClient(new Uri(_agentEndpoint), _fallbackCredential);
+            return _projectClient;
+        }
+
+        // OBO: create per-request client with user's token (cached for request lifetime)
+        if (_projectClient is null)
+        {
+            var userToken = ExtractBearerToken();
+            if (string.IsNullOrEmpty(userToken))
+            {
+                throw new InvalidOperationException(
+                    "OBO mode requires a bearer token but none was found in the request. " +
+                    "Ensure the frontend is sending an Authorization header with a valid token.");
+            }
+
+            var oboCredential = CreateOboCredential(userToken);
+            _logger.LogDebug("Created OBO credential for request");
+            _projectClient = new AIProjectClient(new Uri(_agentEndpoint), oboCredential);
+        }
+
+        return _projectClient;
+    }
+
+    /// <summary>
+    /// Create OBO credential using the user's JWT and managed identity FIC assertion.
+    /// </summary>
+    private OnBehalfOfCredential CreateOboCredential(string userToken)
+    {
+        // s_miAssertion is initialized eagerly in the constructor (OBO branch)
+        Func<CancellationToken, Task<string>> assertionCallback =
+            async (ct) => await s_miAssertion!.GetSignedAssertionAsync(
+                new AssertionRequestOptions { CancellationToken = ct });
+
+        return new OnBehalfOfCredential(
+            _tenantId!,
+            _backendClientId!,
+            assertionCallback,
+            userToken,
+            new OnBehalfOfCredentialOptions());
+    }
+
+    /// <summary>
+    /// Extract bearer token from the current HTTP request.
+    /// </summary>
+    private string? ExtractBearerToken()
+    {
+        var authHeader = _httpContextAccessor?.HttpContext?.Request.Headers.Authorization.ToString();
+        if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return authHeader["Bearer ".Length..].Trim();
     }
 
     /// <summary>
@@ -77,24 +192,27 @@ public class AgentFrameworkService : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_cachedAgent != null)
-            return _cachedAgent;
+        if (s_cachedAgent != null)
+            return s_cachedAgent;
 
-        await _agentLock.WaitAsync(cancellationToken);
+        await s_agentLock.WaitAsync(cancellationToken);
         try
         {
-            if (_cachedAgent != null)
-                return _cachedAgent;
+            if (s_cachedAgent != null)
+                return s_cachedAgent;
 
             _logger.LogInformation("Loading agent via Agent Framework: {AgentId}", _agentId);
 
+            // Use the same credential path as all other operations (MI or OBO)
+            var client = GetProjectClient();
+
             // Use Microsoft.Agents.AI.AzureAI extension method - handles v2 Agents API internally
-            _cachedAgent = await _projectClient.GetAIAgentAsync(
+            s_cachedAgent = await client.GetAIAgentAsync(
                 name: _agentId,
                 cancellationToken: cancellationToken);
 
             // Get the AgentVersion from the cached agent for metadata
-            var agentVersion = _cachedAgent.GetService<AgentVersion>();
+            var agentVersion = s_cachedAgent.GetService<AgentVersion>();
             var definition = agentVersion?.Definition as PromptAgentDefinition;
             
             _logger.LogInformation(
@@ -111,7 +229,7 @@ public class AgentFrameworkService : IDisposable
                     string.Join(", ", definition.StructuredInputs.Keys));
             }
 
-            return _cachedAgent;
+            return s_cachedAgent;
         }
         catch (Exception ex)
         {
@@ -120,7 +238,7 @@ public class AgentFrameworkService : IDisposable
         }
         finally
         {
-            _agentLock.Release();
+            s_agentLock.Release();
         }
     }
 
@@ -153,18 +271,19 @@ public class AgentFrameworkService : IDisposable
             fileDataUris?.Count ?? 0,
             mcpApproval != null);
 
-        // Get ProjectResponsesClient for the agent and conversation
+        CreateResponseOptions options = new() { StreamingEnabled = true };
+
+        // Always bind to conversation — the conversation maintains MCP approval state
         ProjectResponsesClient responsesClient
-            = _projectClient.OpenAI.GetProjectResponsesClientForAgent(
+            = GetProjectClient().OpenAI.GetProjectResponsesClientForAgent(
                 new AgentReference(_agentId), 
                 conversationId);
 
-        CreateResponseOptions options = new() { StreamingEnabled = true };
-
-        // If continuing from MCP approval, link to previous response
+        // If continuing from MCP approval, add approval response items
+        // Don't set PreviousResponseId — the API rejects it with conversation binding,
+        // and the conversation already tracks the pending MCP state
         if (!string.IsNullOrEmpty(previousResponseId) && mcpApproval != null)
         {
-            options.PreviousResponseId = previousResponseId;
             options.InputItems.Add(ResponseItem.CreateMcpApprovalResponseItem(
                 mcpApproval.ApprovalRequestId,
                 mcpApproval.Approved));
@@ -189,12 +308,22 @@ public class AgentFrameworkService : IDisposable
 
         // Dictionary to collect file search results for quote extraction
         var fileSearchQuotes = new Dictionary<string, string>();
+        // Track the current response ID for MCP approval resume flow
+        string? currentResponseId = null;
 
         await foreach (StreamingResponseUpdate update
             in responsesClient.CreateResponseStreamingAsync(
                 options: options,
                 cancellationToken: cancellationToken))
         {
+            // Capture response ID from created event (needed for MCP approval resume)
+            if (update is StreamingResponseCreatedUpdate createdUpdate)
+            {
+                currentResponseId = createdUpdate.Response.Id;
+                _logger.LogDebug("Response created: {ResponseId}", currentResponseId);
+                continue;
+            }
+
             if (update is StreamingResponseOutputTextDeltaUpdate deltaUpdate)
             {
                 yield return StreamChunk.Text(deltaUpdate.Delta);
@@ -218,7 +347,8 @@ public class AgentFrameworkService : IDisposable
                         Id = mcpApprovalItem.Id,
                         ToolName = mcpApprovalItem.ToolName ?? "Unknown tool",
                         ServerLabel = mcpApprovalItem.ServerLabel ?? "MCP Server",
-                        Arguments = argumentsJson
+                        Arguments = argumentsJson,
+                        PreviousResponseId = currentResponseId
                     });
                     continue;
                 }
@@ -256,6 +386,10 @@ public class AgentFrameworkService : IDisposable
             {
                 _logger.LogError("Stream error: {Error}", errorUpdate.Message);
                 throw new InvalidOperationException($"Stream error: {errorUpdate.Message}");
+            }
+            else
+            {
+                _logger.LogDebug("Unhandled stream update type: {Type}", update.GetType().Name);
             }
         }
 
@@ -361,54 +495,30 @@ public class AgentFrameworkService : IDisposable
 
             for (int i = 0; i < imageDataUris.Count; i++)
             {
-                var dataUri = imageDataUris[i];
-                
-                // Validate data URI format
-                if (!dataUri.StartsWith("data:"))
+                var label = $"Image {i + 1}";
+
+                if (!TryParseDataUri(imageDataUris[i], out var mediaType, out var bytes, out var parseError))
                 {
-                    errors.Add($"Image {i + 1}: Invalid format (must be data URI)");
+                    errors.Add($"{label}: {parseError}");
                     continue;
                 }
 
-                var semiIndex = dataUri.IndexOf(';');
-                var commaIndex = dataUri.IndexOf(',');
-                
-                if (semiIndex < 0 || commaIndex < 0 || commaIndex < semiIndex)
-                {
-                    errors.Add($"Image {i + 1}: Malformed data URI");
-                    continue;
-                }
-
-                // Extract and validate MIME type
-                var mediaType = dataUri[5..semiIndex].ToLowerInvariant();
                 if (!AllowedImageTypes.Contains(mediaType))
                 {
-                    errors.Add($"Image {i + 1}: Unsupported type '{mediaType}'. Allowed: PNG, JPEG, GIF, WebP");
+                    errors.Add($"{label}: Unsupported type '{mediaType}'. Allowed: PNG, JPEG, GIF, WebP");
                     continue;
                 }
 
-                // Validate Base64 and decode
-                var base64Data = dataUri[(commaIndex + 1)..];
-                try
+                if (bytes.Length > MaxImageSizeBytes)
                 {
-                    var bytes = Convert.FromBase64String(base64Data);
-                    
-                    // Enforce size limit
-                    if (bytes.Length > MaxImageSizeBytes)
-                    {
-                        var sizeMB = bytes.Length / (1024.0 * 1024.0);
-                        errors.Add($"Image {i + 1}: Size {sizeMB:F1}MB exceeds maximum 5MB");
-                        continue;
-                    }
-                    
-                    contentParts.Add(ResponseContentPart.CreateInputImagePart(
-                        BinaryData.FromBytes(bytes),
-                        mediaType));
+                    var sizeMB = bytes.Length / (1024.0 * 1024.0);
+                    errors.Add($"{label}: Size {sizeMB:F1}MB exceeds maximum 5MB");
+                    continue;
                 }
-                catch (FormatException)
-                {
-                    errors.Add($"Image {i + 1}: Invalid Base64 encoding");
-                }
+
+                contentParts.Add(ResponseContentPart.CreateInputImagePart(
+                    BinaryData.FromBytes(bytes),
+                    mediaType));
             }
         }
 
@@ -425,74 +535,48 @@ public class AgentFrameworkService : IDisposable
             for (int i = 0; i < fileDataUris.Count; i++)
             {
                 var file = fileDataUris[i];
-                var dataUri = file.DataUri;
-                
-                // Validate data URI format
-                if (!dataUri.StartsWith("data:"))
+                var label = $"File {i + 1} ({file.FileName})";
+
+                if (!TryParseDataUri(file.DataUri, out var mediaType, out var bytes, out var parseError))
                 {
-                    errors.Add($"File {i + 1} ({file.FileName}): Invalid format (must be data URI)");
+                    errors.Add($"{label}: {parseError}");
                     continue;
                 }
 
-                var semiIndex = dataUri.IndexOf(';');
-                var commaIndex = dataUri.IndexOf(',');
-                
-                if (semiIndex < 0 || commaIndex < 0 || commaIndex < semiIndex)
-                {
-                    errors.Add($"File {i + 1} ({file.FileName}): Malformed data URI");
-                    continue;
-                }
-
-                // Extract and validate MIME type
-                var mediaType = dataUri[5..semiIndex].ToLowerInvariant();
                 if (!AllowedDocumentTypes.Contains(mediaType))
                 {
-                    errors.Add($"File {i + 1} ({file.FileName}): Unsupported type '{mediaType}'");
+                    errors.Add($"{label}: Unsupported type '{mediaType}'");
                     continue;
                 }
 
                 // Verify MIME type matches what was declared
                 if (!string.Equals(mediaType, file.MimeType.ToLowerInvariant(), StringComparison.OrdinalIgnoreCase))
                 {
-                    errors.Add($"File {i + 1} ({file.FileName}): MIME type mismatch (declared: {file.MimeType}, detected: {mediaType})");
+                    errors.Add($"{label}: MIME type mismatch (declared: {file.MimeType}, detected: {mediaType})");
                     continue;
                 }
 
-                // Validate Base64 and decode
-                var base64Data = dataUri[(commaIndex + 1)..];
-                try
+                if (bytes.Length > MaxFileSizeBytes)
                 {
-                    var bytes = Convert.FromBase64String(base64Data);
-                    
-                    // Enforce size limit
-                    if (bytes.Length > MaxFileSizeBytes)
-                    {
-                        var sizeMB = bytes.Length / (1024.0 * 1024.0);
-                        errors.Add($"File {i + 1} ({file.FileName}): Size {sizeMB:F1}MB exceeds maximum 20MB");
-                        continue;
-                    }
-                    
-                    // Handle text-based files by inlining their content
-                    // The Responses API only supports PDF for CreateInputFilePart
-                    if (TextBasedDocumentTypes.Contains(mediaType))
-                    {
-                        // Decode text content and add as inline text with filename context
-                        var textContent = System.Text.Encoding.UTF8.GetString(bytes);
-                        var inlineText = $"\n\n--- Content of {file.FileName} ---\n{textContent}\n--- End of {file.FileName} ---\n";
-                        contentParts.Add(ResponseContentPart.CreateInputTextPart(inlineText));
-                    }
-                    else if (FileInputTypes.Contains(mediaType))
-                    {
-                        // PDF files can be sent as file input
-                        contentParts.Add(ResponseContentPart.CreateInputFilePart(
-                            BinaryData.FromBytes(bytes),
-                            mediaType,
-                            file.FileName));
-                    }
+                    var sizeMB = bytes.Length / (1024.0 * 1024.0);
+                    errors.Add($"{label}: Size {sizeMB:F1}MB exceeds maximum 20MB");
+                    continue;
                 }
-                catch (FormatException)
+
+                // Handle text-based files by inlining their content
+                // The Responses API only supports PDF for CreateInputFilePart
+                if (TextBasedDocumentTypes.Contains(mediaType))
                 {
-                    errors.Add($"File {i + 1} ({file.FileName}): Invalid Base64 encoding");
+                    var textContent = System.Text.Encoding.UTF8.GetString(bytes);
+                    var inlineText = $"\n\n--- Content of {file.FileName} ---\n{textContent}\n--- End of {file.FileName} ---\n";
+                    contentParts.Add(ResponseContentPart.CreateInputTextPart(inlineText));
+                }
+                else if (FileInputTypes.Contains(mediaType))
+                {
+                    contentParts.Add(ResponseContentPart.CreateInputFilePart(
+                        BinaryData.FromBytes(bytes),
+                        mediaType,
+                        file.FileName));
                 }
             }
         }
@@ -503,6 +587,47 @@ public class AgentFrameworkService : IDisposable
         }
 
         return ResponseItem.CreateUserMessageItem(contentParts);
+    }
+
+    /// <summary>
+    /// Parses a data URI into its media type and decoded bytes.
+    /// </summary>
+    /// <returns>true if parsing succeeded; false with an error message otherwise.</returns>
+    private static bool TryParseDataUri(string dataUri, out string mediaType, out byte[] bytes, out string error)
+    {
+        mediaType = string.Empty;
+        bytes = Array.Empty<byte>();
+        error = string.Empty;
+
+        if (!dataUri.StartsWith("data:"))
+        {
+            error = "Invalid format (must be data URI)";
+            return false;
+        }
+
+        var semiIndex = dataUri.IndexOf(';');
+        var commaIndex = dataUri.IndexOf(',');
+
+        if (semiIndex < 0 || commaIndex < 0 || commaIndex < semiIndex)
+        {
+            error = "Malformed data URI";
+            return false;
+        }
+
+        mediaType = dataUri[5..semiIndex].ToLowerInvariant();
+
+        var base64Data = dataUri[(commaIndex + 1)..];
+        try
+        {
+            bytes = Convert.FromBase64String(base64Data);
+        }
+        catch (FormatException)
+        {
+            error = "Invalid Base64 encoding";
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -561,7 +686,7 @@ public class AgentFrameworkService : IDisposable
                         FileId = containerCitation.FileId,
                         StartIndex = containerCitation.StartIndex,
                         EndIndex = containerCitation.EndIndex,
-                        Quote = fileSearchQuotes?.TryGetValue(containerCitation.FileId, out var containerQuote) == true 
+                        Quote = fileSearchQuotes?.TryGetValue(containerCitation.FileId ?? string.Empty, out var containerQuote) == true 
                             ? containerQuote : null
                     },
                     
@@ -600,7 +725,7 @@ public class AgentFrameworkService : IDisposable
             }
 
             ProjectConversation conversation
-                = await _projectClient.OpenAI.Conversations.CreateProjectConversationAsync(
+                = await GetProjectClient().OpenAI.Conversations.CreateProjectConversationAsync(
                     conversationOptions,
                     cancellationToken);
 
@@ -622,6 +747,109 @@ public class AgentFrameworkService : IDisposable
     }
 
     /// <summary>
+    /// List conversations for the current agent.
+    /// </summary>
+    public async Task<List<ConversationSummary>> ListConversationsAsync(int limit = 20, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        try
+        {
+            _logger.LogInformation("Listing conversations (limit={Limit})", limit);
+
+            var conversations = new List<ConversationSummary>();
+            // Fetch limit+1 to detect if more conversations exist beyond the requested page
+            var fetchLimit = limit + 1;
+            await foreach (var conv in GetProjectClient().OpenAI.Conversations.GetProjectConversationsAsync(
+                new AgentReference(_agentId), cancellationToken: cancellationToken))
+            {
+                conversations.Add(new ConversationSummary
+                {
+                    Id = conv.Id,
+                    Title = conv.Metadata?.TryGetValue("title", out var title) == true ? title : null,
+                    CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
+                });
+
+                if (conversations.Count >= fetchLimit)
+                    break;
+            }
+
+            _logger.LogInformation("Found {Count} conversations", conversations.Count);
+            return conversations;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to list conversations");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Get messages for a specific conversation.
+    /// </summary>
+    public async Task<List<ConversationMessageInfo>> GetConversationMessagesAsync(
+        string conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        try
+        {
+            _logger.LogInformation("Getting messages for conversation: {ConversationId}", conversationId);
+
+            var messages = new List<ConversationMessageInfo>();
+
+            // Filter to message items only
+            await foreach (var item in GetProjectClient().OpenAI.Conversations.GetProjectConversationItemsAsync(
+                conversationId, itemKind: AgentResponseItemKind.Message, cancellationToken: cancellationToken))
+            {
+                var responseItem = item.AsResponseResultItem();
+                if (responseItem is MessageResponseItem messageItem)
+                {
+                    var content = string.Join("", messageItem.Content
+                        .Where(c => c.Text != null)
+                        .Select(c => c.Text));
+
+                    messages.Add(new ConversationMessageInfo
+                    {
+                        Role = messageItem.Role.ToString().ToLowerInvariant(),
+                        Content = content
+                    });
+                }
+            }
+
+            _logger.LogInformation("Found {Count} messages in conversation {ConversationId}", messages.Count, conversationId);
+            return messages;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get messages for conversation: {ConversationId}", conversationId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Delete a conversation.
+    /// </summary>
+    /// <remarks>
+    /// TODO: The Azure.AI.Projects SDK does not expose a delete conversation API.
+    /// This method is a stub that will need to be updated when the SDK adds delete support.
+    /// </remarks>
+    public Task DeleteConversationAsync(string conversationId, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _logger.LogWarning(
+            "DeleteConversationAsync is not yet supported by the SDK. ConversationId: {ConversationId}",
+            conversationId);
+
+        // TODO: Replace with actual SDK call when available.
+        // The ProjectConversationsClient currently only supports Create, Get, List, and Update.
+        throw new NotSupportedException(
+            "Conversation deletion is not yet supported by the Azure.AI.Projects SDK.");
+    }
+
+    /// <summary>
     /// Get the agent metadata (name, description, etc.) for display in UI.
     /// Uses Agent Framework's ChatClientAgent which provides access to AgentVersion.
     /// </summary>
@@ -632,8 +860,8 @@ public class AgentFrameworkService : IDisposable
         // Ensure agent is loaded via Agent Framework
         var agent = await GetAgentAsync(cancellationToken);
 
-        if (_cachedMetadata != null)
-            return _cachedMetadata;
+        if (s_cachedMetadata != null)
+            return s_cachedMetadata;
 
         // Get AgentVersion from the ChatClientAgent's services
         var agentVersion = agent.GetService<AgentVersion>();
@@ -652,7 +880,7 @@ public class AgentFrameworkService : IDisposable
         // Parse starter prompts from metadata
         List<string>? starterPrompts = ParseStarterPrompts(metadata);
 
-        _cachedMetadata = new AgentMetadataResponse
+        s_cachedMetadata = new AgentMetadataResponse
         {
             Id = _agentId,
             Object = "agent",
@@ -665,7 +893,7 @@ public class AgentFrameworkService : IDisposable
             StarterPrompts = starterPrompts
         };
 
-        return _cachedMetadata;
+        return s_cachedMetadata;
     }
 
     /// <summary>
@@ -724,7 +952,9 @@ public class AgentFrameworkService : IDisposable
         if (!_disposed)
         {
             _disposed = true;
-            _agentLock.Dispose();
+            // AIProjectClient does not implement IDisposable (verified via reflection on
+            // Azure.AI.Projects assembly). No cleanup needed for _projectClient.
+            _projectClient = null;
             _logger.LogDebug("AgentFrameworkService disposed");
         }
     }

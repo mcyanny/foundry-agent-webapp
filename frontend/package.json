@@ -20,6 +20,7 @@
     "@fluentui-copilot/react-copilot-chat": "0.13.2",
     "@fluentui/react-components": "^9.72.9",
     "@fluentui/react-icons": "^2.0.316",
+    "@microsoft/applicationinsights-web": "^3.3.11",
     "clsx": "^2.1.1",
     "copy-to-clipboard": "^3.3.3",
     "date-fns": "^4.1.0",

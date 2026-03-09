@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { appReducer } from '../appReducer';
+import { initialAppState } from '../../types/appState';
 import type { AppState, AppAction, IChatItem, IAnnotation } from '../../types/appState';
 import type { AccountInfo } from '@azure/msal-browser';
 
@@ -20,6 +21,12 @@ function createInitialState(): AppState {
     },
     ui: {
       chatInputEnabled: true,
+    },
+    conversations: {
+      list: [],
+      isLoading: false,
+      sidebarOpen: false,
+      hasMore: false,
     },
   };
 }
@@ -109,6 +116,54 @@ describe('appReducer', () => {
 
       expect(result.chat.messages).toHaveLength(2);
       expect(result.chat.messages[0]).toEqual(existingMessage);
+    });
+  });
+
+  describe('CHAT_LOAD_MESSAGES', () => {
+    it('appends messages to existing messages', () => {
+      const state = createInitialState();
+      const existing = createMockMessage({ id: 'existing-1' });
+      state.chat.messages = [existing];
+
+      const loaded = [
+        createMockMessage({ id: 'loaded-1', content: 'Hello' }),
+        createMockMessage({ id: 'loaded-2', content: 'World' }),
+      ];
+      const action: AppAction = { type: 'CHAT_LOAD_MESSAGES', messages: loaded };
+
+      const result = appReducer(state, action);
+
+      expect(result.chat.messages).toHaveLength(3);
+      expect(result.chat.messages[0]).toEqual(existing);
+      expect(result.chat.messages[1]).toEqual(loaded[0]);
+      expect(result.chat.messages[2]).toEqual(loaded[1]);
+    });
+
+    it('is a no-op when messages array is empty', () => {
+      const state = createInitialState();
+      const existing = createMockMessage({ id: 'existing-1' });
+      state.chat.messages = [existing];
+
+      const action: AppAction = { type: 'CHAT_LOAD_MESSAGES', messages: [] };
+
+      const result = appReducer(state, action);
+
+      expect(result.chat.messages).toHaveLength(1);
+      expect(result.chat.messages[0]).toEqual(existing);
+    });
+
+    it('does NOT change chat.status', () => {
+      const state = createInitialState();
+      state.chat.status = 'idle';
+
+      const action: AppAction = {
+        type: 'CHAT_LOAD_MESSAGES',
+        messages: [createMockMessage({ id: 'msg-1' })],
+      };
+
+      const result = appReducer(state, action);
+
+      expect(result.chat.status).toBe('idle');
     });
   });
 
@@ -351,6 +406,105 @@ describe('appReducer', () => {
     });
   });
 
+  describe('CHAT_MCP_APPROVAL_RESOLVED', () => {
+    it('sets resolved to approved on matching approval message', () => {
+      const state = createInitialState();
+      state.chat.messages = [
+        createMockMessage({
+          id: 'approval-msg-1',
+          role: 'approval',
+          mcpApproval: {
+            id: 'req-123',
+            toolName: 'read_file',
+            serverLabel: 'FS',
+            previousResponseId: 'prev-1',
+          },
+        }),
+      ];
+
+      const result = appReducer(state, {
+        type: 'CHAT_MCP_APPROVAL_RESOLVED',
+        approvalRequestId: 'req-123',
+        resolved: 'approved',
+      });
+
+      expect(result.chat.messages[0].mcpApproval?.resolved).toBe('approved');
+    });
+
+    it('sets resolved to rejected on matching approval message', () => {
+      const state = createInitialState();
+      state.chat.messages = [
+        createMockMessage({
+          id: 'approval-msg-1',
+          role: 'approval',
+          mcpApproval: {
+            id: 'req-456',
+            toolName: 'write_file',
+            serverLabel: 'FS',
+            previousResponseId: 'prev-1',
+          },
+        }),
+      ];
+
+      const result = appReducer(state, {
+        type: 'CHAT_MCP_APPROVAL_RESOLVED',
+        approvalRequestId: 'req-456',
+        resolved: 'rejected',
+      });
+
+      expect(result.chat.messages[0].mcpApproval?.resolved).toBe('rejected');
+    });
+
+    it('does not change non-matching messages', () => {
+      const state = createInitialState();
+      const otherMsg = createMockMessage({ id: 'other-msg', role: 'user', content: 'Hello' });
+      const approvalMsg = createMockMessage({
+        id: 'approval-msg',
+        role: 'approval',
+        mcpApproval: {
+          id: 'req-999',
+          toolName: 'tool',
+          serverLabel: 'S',
+          previousResponseId: '',
+        },
+      });
+      state.chat.messages = [otherMsg, approvalMsg];
+
+      const result = appReducer(state, {
+        type: 'CHAT_MCP_APPROVAL_RESOLVED',
+        approvalRequestId: 'req-999',
+        resolved: 'approved',
+      });
+
+      expect(result.chat.messages[0]).toEqual(otherMsg);
+      expect(result.chat.messages[1].mcpApproval?.resolved).toBe('approved');
+    });
+
+    it('does not crash with non-existent approvalRequestId', () => {
+      const state = createInitialState();
+      state.chat.messages = [
+        createMockMessage({
+          id: 'approval-msg',
+          role: 'approval',
+          mcpApproval: {
+            id: 'req-existing',
+            toolName: 'tool',
+            serverLabel: 'S',
+            previousResponseId: '',
+          },
+        }),
+      ];
+
+      const result = appReducer(state, {
+        type: 'CHAT_MCP_APPROVAL_RESOLVED',
+        approvalRequestId: 'req-nonexistent',
+        resolved: 'approved',
+      });
+
+      expect(result.chat.messages[0].mcpApproval?.resolved).toBeUndefined();
+    });
+  });
+
   describe('CHAT_STREAM_COMPLETE', () => {
     it('sets status to idle', () => {
       const state = createInitialState();
@@ -562,6 +716,147 @@ describe('appReducer', () => {
       appReducer(state, { type: 'CHAT_SEND_MESSAGE', message });
 
       expect(state).toEqual(originalState);
+    });
+  });
+
+  describe('CONVERSATIONS_LOADING', () => {
+    it('sets isLoading to true and preserves other conversation state', () => {
+      const state = createInitialState();
+      state.conversations.sidebarOpen = true;
+      state.conversations.list = [{ id: 'c1', title: 'Test', createdAt: 1 }];
+
+      const result = appReducer(state, { type: 'CONVERSATIONS_LOADING' });
+
+      expect(result.conversations.isLoading).toBe(true);
+      expect(result.conversations.sidebarOpen).toBe(true);
+      expect(result.conversations.list).toHaveLength(1);
+    });
+  });
+
+  describe('CONVERSATIONS_LOADING_DONE', () => {
+    it('sets isLoading to false while preserving conversation data', () => {
+      const state = createInitialState();
+      state.conversations.isLoading = true;
+      state.conversations.sidebarOpen = true;
+      state.conversations.list = [{ id: 'c1', title: 'Existing', createdAt: 1 }];
+      state.conversations.hasMore = true;
+
+      const result = appReducer(state, { type: 'CONVERSATIONS_LOADING_DONE' });
+
+      expect(result.conversations.isLoading).toBe(false);
+      expect(result.conversations.sidebarOpen).toBe(true);
+      expect(result.conversations.list).toHaveLength(1);
+      expect(result.conversations.hasMore).toBe(true);
+    });
+  });
+
+  describe('CONVERSATIONS_SET_LIST', () => {
+    it('sets list from action.conversations, sets hasMore, sets isLoading to false', () => {
+      const state = createInitialState();
+      state.conversations.isLoading = true;
+      const conversations = [
+        { id: 'c1', title: 'Conv 1', createdAt: 1 },
+        { id: 'c2', title: 'Conv 2', createdAt: 2 },
+      ];
+
+      const result = appReducer(state, {
+        type: 'CONVERSATIONS_SET_LIST',
+        conversations,
+        hasMore: true,
+      });
+
+      expect(result.conversations.list).toEqual(conversations);
+      expect(result.conversations.hasMore).toBe(true);
+      expect(result.conversations.isLoading).toBe(false);
+    });
+
+    it('appends to existing list when append is true', () => {
+      const state = createInitialState();
+      state.conversations.list = [{ id: 'c1', title: 'Existing', createdAt: 1 }];
+      const newConversations = [{ id: 'c2', title: 'New', createdAt: 2 }];
+
+      const result = appReducer(state, {
+        type: 'CONVERSATIONS_SET_LIST',
+        conversations: newConversations,
+        hasMore: false,
+        append: true,
+      });
+
+      expect(result.conversations.list).toHaveLength(2);
+      expect(result.conversations.list[0].id).toBe('c1');
+      expect(result.conversations.list[1].id).toBe('c2');
+    });
+
+    it('sets hasMore to false when indicated', () => {
+      const state = createInitialState();
+      state.conversations.hasMore = true;
+
+      const result = appReducer(state, {
+        type: 'CONVERSATIONS_SET_LIST',
+        conversations: [],
+        hasMore: false,
+      });
+
+      expect(result.conversations.hasMore).toBe(false);
+    });
+  });
+
+  describe('CONVERSATIONS_TOGGLE_SIDEBAR', () => {
+    it('toggles sidebarOpen from false to true', () => {
+      const state = createInitialState();
+      state.conversations.sidebarOpen = false;
+
+      const result = appReducer(state, { type: 'CONVERSATIONS_TOGGLE_SIDEBAR' });
+
+      expect(result.conversations.sidebarOpen).toBe(true);
+    });
+
+    it('toggles sidebarOpen from true to false', () => {
+      const state = createInitialState();
+      state.conversations.sidebarOpen = true;
+
+      const result = appReducer(state, { type: 'CONVERSATIONS_TOGGLE_SIDEBAR' });
+
+      expect(result.conversations.sidebarOpen).toBe(false);
+    });
+  });
+
+  describe('CONVERSATIONS_REMOVE', () => {
+    it('removes conversation by ID from list', () => {
+      const state = createInitialState();
+      state.conversations.list = [
+        { id: 'c1', title: 'Conv 1', createdAt: 1 },
+        { id: 'c2', title: 'Conv 2', createdAt: 2 },
+        { id: 'c3', title: 'Conv 3', createdAt: 3 },
+      ];
+
+      const result = appReducer(state, { type: 'CONVERSATIONS_REMOVE', conversationId: 'c2' });
+
+      expect(result.conversations.list).toHaveLength(2);
+      expect(result.conversations.list.find(c => c.id === 'c2')).toBeUndefined();
+    });
+
+    it('preserves other conversations', () => {
+      const state = createInitialState();
+      state.conversations.list = [
+        { id: 'c1', title: 'Conv 1', createdAt: 1 },
+        { id: 'c2', title: 'Conv 2', createdAt: 2 },
+      ];
+
+      const result = appReducer(state, { type: 'CONVERSATIONS_REMOVE', conversationId: 'c1' });
+
+      expect(result.conversations.list).toHaveLength(1);
+      expect(result.conversations.list[0].id).toBe('c2');
+    });
+  });
+
+  describe('state shape', () => {
+    it('should have expected state shape (update this test when adding new state fields)', () => {
+      const shape = JSON.stringify(Object.keys(initialAppState).sort());
+      expect(shape).toBe('["auth","chat","conversations","ui"]');
+      // Drill into conversations shape
+      const convShape = JSON.stringify(Object.keys(initialAppState.conversations).sort());
+      expect(convShape).toBe('["hasMore","isLoading","list","sidebarOpen"]');
     });
   });
 });

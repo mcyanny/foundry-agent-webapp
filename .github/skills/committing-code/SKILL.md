@@ -8,7 +8,7 @@ description: >
 
 # Commit Message Format
 
-```
+```text
 <type>(<scope>): <short description>
 
 ## Summary

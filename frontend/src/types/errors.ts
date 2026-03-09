@@ -7,6 +7,7 @@ export type ErrorCode =
   | 'AUTH'         // 401/403 authentication errors
   | 'STREAM'       // SSE streaming errors
   | 'SERVER'       // 400/500 server response errors
+  | 'API'          // REST API errors (conversation management, etc.)
   | 'UNKNOWN';     // Unclassified errors
 
 export interface AppError {
@@ -28,6 +29,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   AUTH: 'Your session has expired. Please sign in again to continue.',
   STREAM: 'The response was interrupted. Click Retry to continue your conversation.',
   SERVER: 'The server encountered an error. This has been logged and our team will investigate.',
+  API: 'The request failed. Please try again.',
   UNKNOWN: 'An unexpected error occurred. Please try again or contact support if the issue persists.',
 };
 
@@ -54,6 +56,11 @@ export const DETAILED_ERROR_MESSAGES: Record<ErrorCode, { title: string; descrip
     title: 'Server Error',
     description: 'The server encountered an unexpected error.',
     hint: 'Please try again in a few moments.'
+  },
+  API: {
+    title: 'Request Failed',
+    description: 'The API request could not be completed.',
+    hint: 'Please try again.'
   },
   UNKNOWN: {
     title: 'Unexpected Error',

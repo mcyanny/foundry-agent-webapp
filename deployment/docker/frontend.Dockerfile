@@ -4,6 +4,8 @@ FROM node:22-alpine AS frontend-builder
 # Build arguments for environment variables (required at build time)
 ARG ENTRA_SPA_CLIENT_ID
 ARG ENTRA_TENANT_ID
+ARG ENTRA_BACKEND_CLIENT_ID=""
+ARG APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING=""
 
 WORKDIR /app/frontend
 
@@ -20,6 +22,8 @@ RUN rm -f .env.local .env.development .env
 ENV NODE_ENV=production
 ENV VITE_ENTRA_SPA_CLIENT_ID=$ENTRA_SPA_CLIENT_ID
 ENV VITE_ENTRA_TENANT_ID=$ENTRA_TENANT_ID
+ENV VITE_ENTRA_BACKEND_CLIENT_ID=$ENTRA_BACKEND_CLIENT_ID
+ENV VITE_APPLICATIONINSIGHTS_CONNECTION_STRING=$APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING
 # Don't set VITE_API_URL - will default to "/api" (same origin)
 
 # Build the frontend
@@ -61,6 +65,9 @@ EXPOSE 8080
 # Set environment variables
 ENV ASPNETCORE_URLS=http://+:8080
 ENV ASPNETCORE_ENVIRONMENT=Production
+
+# Run as non-root user (built-in 'app' user in ASP.NET alpine images)
+USER app
 
 # Start the .NET API (which will also serve frontend static files from wwwroot)
 ENTRYPOINT ["dotnet", "WebApp.Api.dll"]

@@ -6,15 +6,18 @@ description: Guidelines and patterns for writing unit tests in TypeScript using 
 
 ## Overview
 
-This skill covers writing unit tests for the frontend using **Vitest** - the fastest and most loved test runner in the JavaScript ecosystem (State of JS 2024 #1 satisfaction).
+This skill covers writing unit tests for the frontend using **Vitest**.
 
 ## Project Structure
 
-```
+```text
 frontend/
 ├── package.json          # vitest + jsdom devDependencies
 ├── vite.config.ts        # Vitest config inline
 └── src/
+    ├── config/
+    │   └── __tests__/
+    │       └── authConfig.test.ts
     ├── utils/
     │   ├── citationParser.ts
     │   ├── sseParser.ts
@@ -23,10 +26,13 @@ frontend/
     │       ├── citationParser.test.ts
     │       ├── sseParser.test.ts
     │       └── fileAttachments.test.ts
+    ├── services/
+    │   └── __tests__/
+    │       └── chatService.test.ts
     └── reducers/
         ├── appReducer.ts
         └── __tests__/
-            └── appReducer.test.ts
+            └── appReducer.test.ts    # Includes state shape snapshot
 ```
 
 ## Configuration
@@ -179,6 +185,21 @@ describe("moduleName", () => {
   });
 });
 ```
+
+## State Shape Snapshot Tests
+
+Use state shape snapshots to prevent accidental state changes from going unnoticed. If a new field is added to `AppState` without updating the test, it fails:
+
+```typescript
+it('should have expected state shape (update this test when adding new state fields)', () => {
+  const shape = JSON.stringify(Object.keys(initialAppState).sort());
+  expect(shape).toBe('["auth","chat","conversations","ui"]');
+  const convShape = JSON.stringify(Object.keys(initialAppState.conversations).sort());
+  expect(convShape).toBe('["hasMore","isLoading","list","sidebarOpen"]');
+});
+```
+
+This forces anyone adding state fields to also add test coverage — the test file becomes the registry of all state. Apply this pattern to any new top-level state domain.
 
 ## When Unit Tests Aren't Enough
 

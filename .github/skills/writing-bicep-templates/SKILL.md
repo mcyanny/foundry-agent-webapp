@@ -43,12 +43,18 @@ output identityPrincipalId string = containerApp.identity.principalId
 
 ## Managed Identity
 
-Always use system-assigned identity + output `principalId`:
+Use a user-assigned MI for ACR pull and OBO (avoids circular dependencies). Create it in the infrastructure module so its `principalId` is available before the Container App:
 
 ```bicep
-identity: { type: 'SystemAssigned' }
-output identityPrincipalId string = resource.identity.principalId
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+  name: '${abbrs.managedIdentityUserAssignedIdentities}web-${resourceToken}'
+  location: location
+  properties: { isolationScope: 'Regional' }
+}
+output managedIdentityPrincipalId string = managedIdentity.properties.principalId
 ```
+
+Attach to Container App with `identity: { type: 'UserAssigned', userAssignedIdentities: { '${miId}': {} } }`. Use MI for ACR pull via `registries: [{ server: acr.loginServer, identity: miId }]`.
 
 ## RBAC Assignments
 
@@ -71,7 +77,7 @@ Key settings: System identity + scale-to-zero + HTTPS only:
 
 ```bicep
 resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
-  identity: { type: 'SystemAssigned' }
+  identity: { type: 'UserAssigned', userAssignedIdentities: { '${userAssignedIdentityId}': {} } }
   properties: {
     configuration: {
       ingress: {
@@ -87,14 +93,14 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
 }
 ```
 
-## Secrets Pattern
+## ACR Pull Pattern
 
-Use Container App secrets + `listCredentials()`:
+Use user-assigned MI for ACR pull (no admin credentials or secrets):
 
 ```bicep
-secrets: [{
-  name: 'registry-password'
-  value: containerRegistry.listCredentials().passwords[0].value
+registries: [{
+  server: containerRegistry.properties.loginServer
+  identity: userAssignedIdentityId  // MI with AcrPull role
 }]
 ```
 
@@ -109,19 +115,23 @@ az deployment group what-if --template-file main.bicep
 
 ## Project-Specific: Module Hierarchy
 
-```
+```text
 main.bicep (subscription scope)
 ├─ Resource group
-├─ main-infrastructure.bicep (ACR + Container Apps Env + Log Analytics)
-├─ main-app.bicep (Container App)
-└─ RBAC (Cognitive Services User role)
+├─ main-infrastructure.bicep (ACR + Container Apps Env + Log Analytics + User-Assigned MI)
+├─ entra-app.bicep (SPA app + conditional OBO backend app with FIC + admin consent)
+├─ main-app.bicep (Container App with MI-based ACR pull)
+└─ RBAC (Cognitive Services User role via postprovision CLI)
 ```
 
 ## Project-Specific: Container App Configuration
 
 ```bicep
-resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
-  identity: { type: 'SystemAssigned' }
+resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${userAssignedIdentityId}': {} }
+  }
   properties: {
     managedEnvironmentId: containerAppsEnvironmentId
     configuration: {
@@ -130,20 +140,16 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
         targetPort: 8080
         allowInsecure: false
       }
-      secrets: [{
-        name: 'registry-password'
-        value: containerRegistry.listCredentials().passwords[0].value
+      registries: [{
+        server: containerRegistry.properties.loginServer
+        identity: userAssignedIdentityId  // MI-based pull, no secrets
       }]
     }
     template: {
       containers: [{
         name: 'web'
         image: containerImage
-        env: [
-          { name: 'ENTRA_SPA_CLIENT_ID', value: entraSpaClientId }
-          { name: 'AI_AGENT_ENDPOINT', value: aiAgentEndpoint }
-          { name: 'AI_AGENT_ID', value: aiAgentId }
-        ]
+        env: containerEnv  // Base env + conditional OBO env
         resources: { cpu: json('0.5'), memory: '1Gi' }
       }]
       scale: { minReplicas: 0, maxReplicas: 3 }

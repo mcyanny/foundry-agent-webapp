@@ -15,7 +15,7 @@ description: Provides deployment commands and troubleshooting for Azure Containe
 
 ### Delegation Pattern
 
-```
+```text
 runSubagent(
   prompt: "ANALYSIS task - analyze deployment issue.
     
@@ -92,7 +92,7 @@ azd provision
 ## Container Infrastructure
 
 - **Health Probes**: Liveness (`GET /api/health` every 30s) and startup (`GET /api/health` every 10s, 5s initial delay) probes configured on the Container App
-- **ACR Pull**: Uses admin credentials via `listCredentials()` — avoids chicken-and-egg with managed identity (Container App identity doesn't exist until provisioned). Production apps should use a user-assigned managed identity created before the Container App.
+- **ACR Pull**: Uses a user-assigned managed identity with `AcrPull` role — no admin credentials or secrets. The MI is created in `main-infrastructure.bicep` before the Container App, avoiding the chicken-and-egg problem.
 - **Resource Defaults**: 0.5 vCPU, 1GB RAM, 0-3 replicas (all parameterized in `container-app.bicep`)
 
 ## Troubleshooting

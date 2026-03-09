@@ -5,7 +5,7 @@ import {
   type ImperativeControlPluginRef,
 } from '@fluentui-copilot/react-copilot';
 import { Button, Toast, ToastTitle, Toaster, useId, useToastController, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { Attach24Regular, Settings24Regular, ChatAdd24Regular, Stop24Regular } from '@fluentui/react-icons';
+import { Attach24Regular, Settings24Regular, ChatAdd24Regular, Stop24Regular, History24Regular } from '@fluentui/react-icons';
 import { FilePreview } from './FilePreview';
 import { validateFile, validateFileCount } from '../../utils/fileAttachments';
 import styles from './ChatInput.module.css';
@@ -41,6 +41,7 @@ interface ChatInputProps {
   placeholder?: string;
   onOpenSettings?: () => void;
   onNewChat?: () => void;
+  onToggleSidebar?: () => void;
   hasMessages?: boolean;
   isStreaming?: boolean;
   onCancelStream?: () => void;
@@ -59,6 +60,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   placeholder = "Type your message...",
   onOpenSettings,
   onNewChat,
+  onToggleSidebar,
   hasMessages = false,
   isStreaming = false,
   onCancelStream,
@@ -267,6 +269,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         )}
         <div className={styles.buttonRow}>
           <div className={styles.actionButtons}>
+            {onToggleSidebar && (
+              <Button
+                appearance="subtle"
+                icon={<History24Regular />}
+                onClick={onToggleSidebar}
+                disabled={disabled}
+                aria-label="Conversation history"
+              />
+            )}
             {onOpenSettings && (
               <Button
                 appearance="subtle"

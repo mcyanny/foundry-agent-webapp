@@ -80,7 +80,7 @@ public async IAsyncEnumerable<StreamChunk> StreamMessageAsync(
 
 ## Frontend: Action Flow
 
-```
+```text
 CHAT_SEND_MESSAGE 
   → CHAT_ADD_ASSISTANT_MESSAGE 
   → CHAT_START_STREAM 
@@ -164,7 +164,7 @@ app.MapPost("/api/chat/stream", async (
 
 ## Project-Specific: Frontend State Flow
 
-```
+```text
 CHAT_SEND_MESSAGE 
   → CHAT_ADD_ASSISTANT_MESSAGE 
   → CHAT_START_STREAM 
@@ -192,7 +192,7 @@ CHAT_SEND_MESSAGE
 
 Each state change prints (dev only):
 
-```
+```text
 🔄 [HH:MM:SS] ACTION_TYPE
 Action: { … }
 Changes: { field: before → after }

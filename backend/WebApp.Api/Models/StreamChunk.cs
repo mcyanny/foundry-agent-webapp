@@ -61,4 +61,5 @@ public record McpApprovalRequest
     public required string ToolName { get; init; }
     public required string ServerLabel { get; init; }
     public string? Arguments { get; init; }
+    public string? PreviousResponseId { get; init; }
 }

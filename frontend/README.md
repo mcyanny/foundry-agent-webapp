@@ -106,13 +106,15 @@ Production builds are created in Docker multi-stage builds and served from ASP.N
 
 ## Key Dependencies
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| react | 19.x | UI framework |
-| @azure/msal-react | 3.x | Entra ID authentication |
-| @azure/msal-browser | 4.x | MSAL.js browser library |
-| @fluentui/react-components | 9.x | Fluent UI components |
-| vite | 6.x | Build tool + dev server |
+| Package | Purpose |
+|---------|---------|
+| react | UI framework |
+| @azure/msal-react | Entra ID authentication |
+| @azure/msal-browser | MSAL.js browser library |
+| @fluentui/react-components | Fluent UI components |
+| vite | Build tool + dev server |
+
+See `package.json` for current versions.
 
 ## Component Architecture
 

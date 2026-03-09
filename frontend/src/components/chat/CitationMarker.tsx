@@ -21,7 +21,8 @@ function CitationMarkerComponent({
   annotation,
   onClick 
 }: CitationMarkerProps) {
-  const tooltipContent = annotation?.label || `Citation ${index}`;
+  const sourcePrefix = annotation?.type === 'uri_citation' ? '🔗 ' : annotation?.type === 'file_citation' ? '📄 ' : '';
+  const tooltipContent = `${sourcePrefix}${annotation?.label || `Citation ${index}`}`;
   
   const handleClick = () => {
     onClick(index, annotation);

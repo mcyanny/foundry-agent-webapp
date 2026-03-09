@@ -1,6 +1,7 @@
 import React, { Component, type ReactNode } from 'react';
 import { makeStyles, tokens, Text, Button } from '@fluentui/react-components';
 import { ErrorCircleRegular } from '@fluentui/react-icons';
+import { trackException } from '../../services/telemetry';
 
 const useStyles = makeStyles({
   container: {
@@ -94,6 +95,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('ErrorBoundary caught error:', error, errorInfo);
+    trackException(error, { componentStack: errorInfo.componentStack || '' });
     
     // Call optional error handler
     if (this.props.onError) {

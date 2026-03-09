@@ -7,6 +7,9 @@ import { msalConfig } from "./config/authConfig";
 import "./index.css";
 import { AppProvider } from './contexts/AppContext';
 import { ThemeProvider } from './components/ThemeProvider';
+import { initTelemetry } from './services/telemetry';
+
+initTelemetry();
 
 // Initialize MSAL instance
 const msalInstance = new PublicClientApplication(msalConfig);

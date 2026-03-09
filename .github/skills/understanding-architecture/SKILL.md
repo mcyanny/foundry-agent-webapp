@@ -16,11 +16,11 @@ description: Provides architecture overview with state machines, SSE event flow,
 | Frontend | React 19 + Vite | 5173 | `frontend/src/App.tsx` |
 | Backend | ASP.NET Core 9 | 8080 | `backend/WebApp.Api/Program.cs` |
 | Auth | MSAL.js → JWT Bearer | — | `frontend/src/config/authConfig.ts` |
-| AI SDK | Azure.AI.Projects | — | `backend/.../AgentFrameworkService.cs` |
+| AI SDK | Azure.AI.Projects + Agent Framework | — | `backend/.../AgentFrameworkService.cs` |
 
 ### Data Flow
 
-```
+```text
 User → ChatInput → CHAT_SEND_MESSAGE → ChatService.sendMessage()
      → POST /api/chat/stream (JWT) → AgentFrameworkService.StreamMessageAsync()
      → AI Foundry → SSE chunks → parseSseLine() → Reducer actions → UI update
@@ -32,7 +32,7 @@ User → ChatInput → CHAT_SEND_MESSAGE → ChatService.sendMessage()
 
 ### Chat States
 
-```
+```text
 idle ──CHAT_SEND_MESSAGE──► sending ──CHAT_START_STREAM──► streaming
   ▲                            │                              │
   │                            ▼                              ▼
@@ -50,7 +50,7 @@ idle ──CHAT_SEND_MESSAGE──► sending ──CHAT_START_STREAM──► s
 
 ### Auth States
 
-```
+```text
 initializing ──AUTH_INITIALIZED──► authenticated ──AUTH_TOKEN_EXPIRED──► unauthenticated
                                          │                                    │
                                          └───────────AUTH_INITIALIZED──────────┘
@@ -74,7 +74,7 @@ initializing ──AUTH_INITIALIZED──► authenticated ──AUTH_TOKEN_EXPI
 
 ### Event Sequence
 
-```
+```text
 1. conversationId  (always first)
 2. chunk           (0-N times)
 3. annotations     (0-N times, after item complete)
@@ -143,7 +143,7 @@ Update the architecture document when:
 
 Before committing architecture doc changes:
 
-```
+```text
 □ Mermaid Diagrams
   □ All states match code (appState.ts types)
   □ All transitions match reducer (appReducer.ts cases)
@@ -227,4 +227,4 @@ See [ARCHITECTURE-FLOW.md#2.3](../../../ARCHITECTURE-FLOW.md) - End-to-End Messa
 
 ### "How are credentials resolved in production vs development?"
 - **Development**: `ChainedTokenCredential(AzureCliCredential, AzureDeveloperCliCredential)`
-- **Production**: `ManagedIdentityCredential` (system-assigned)
+- **Production**: `ManagedIdentityCredential(miClientId)` (user-assigned MI with `MANAGED_IDENTITY_CLIENT_ID`)

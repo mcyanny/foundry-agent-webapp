@@ -73,13 +73,13 @@ try {
 ## Environment Variables
 
 **Frontend** (`.env.local`):
-```
+```ini
 VITE_ENTRA_SPA_CLIENT_ID=...
 VITE_ENTRA_TENANT_ID=...
 ```
 
 **Backend** (`.env`):
-```
+```ini
 AzureAd__ClientId=...
 AzureAd__TenantId=...
 ```

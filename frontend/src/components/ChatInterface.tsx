@@ -23,6 +23,7 @@ interface ChatInterfaceProps {
   onOpenSettings?: () => void;
   onNewChat?: () => void;
   onCancelStream?: () => void;
+  onToggleSidebar?: () => void;
   hasMessages?: boolean;
   disabled: boolean;
   agentName?: string;
@@ -33,7 +34,7 @@ interface ChatInterfaceProps {
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = (props) => {
-  const { messages, status, error, streamingMessageId, onSendMessage, onMcpApproval, onClearError, onOpenSettings, onNewChat, onCancelStream, hasMessages, disabled, agentName, agentDescription, agentLogo, starterPrompts, conversationId } = props;
+  const { messages, status, error, streamingMessageId, onSendMessage, onMcpApproval, onClearError, onOpenSettings, onNewChat, onCancelStream, onToggleSidebar, hasMessages, disabled, agentName, agentDescription, agentLogo, starterPrompts, conversationId } = props;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [liveRegionMessage, setLiveRegionMessage] = useState<string>('');
   
@@ -112,6 +113,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = (props) => {
                     toolName={message.mcpApproval?.toolName || ''}
                     serverLabel={message.mcpApproval?.serverLabel || ''}
                     arguments={message.mcpApproval?.arguments}
+                    resolved={message.mcpApproval?.resolved}
                     onApprove={() => onMcpApproval?.(
                       message.mcpApproval!.id,
                       true,
@@ -171,6 +173,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = (props) => {
           disabled={isBusy}
           onOpenSettings={onOpenSettings}
           onNewChat={onNewChat}
+          onToggleSidebar={onToggleSidebar}
           hasMessages={hasMessages}
           placeholder="Type your message here..."
           isStreaming={isStreaming}

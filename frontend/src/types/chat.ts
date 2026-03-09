@@ -18,6 +18,7 @@ export interface IMcpApprovalRequest {
   serverLabel: string;
   arguments?: string;
   previousResponseId?: string;
+  resolved?: 'approved' | 'rejected';
 }
 
 export interface IUsageInfo {

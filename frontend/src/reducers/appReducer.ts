@@ -47,6 +47,32 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
         },
       };
 
+    case 'CHAT_LOAD_MESSAGES':
+      return {
+        ...state,
+        chat: {
+          ...state.chat,
+          messages: [...state.chat.messages, ...action.messages],
+        },
+      };
+
+    case 'CHAT_LOAD_CONVERSATION':
+      return {
+        ...state,
+        chat: {
+          ...state.chat,
+          messages: action.messages,
+          status: 'idle',
+          currentConversationId: action.conversationId,
+          streamingMessageId: undefined,
+          error: null,
+        },
+        ui: {
+          ...state.ui,
+          chatInputEnabled: true,
+        },
+      };
+
     case 'CHAT_ADD_ASSISTANT_MESSAGE':
       return {
         ...state,
@@ -162,6 +188,20 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
       };
     }
 
+    case 'CHAT_MCP_APPROVAL_RESOLVED': {
+      return {
+        ...state,
+        chat: {
+          ...state.chat,
+          messages: state.chat.messages.map(msg =>
+            msg.role === 'approval' && msg.mcpApproval?.id === action.approvalRequestId
+              ? { ...msg, mcpApproval: { ...msg.mcpApproval!, resolved: action.resolved } }
+              : msg
+          ),
+        },
+      };
+    }
+
     case 'CHAT_STREAM_COMPLETE': {
       // Update the completed message with usage info
       const updatedMessages = state.chat.messages.map(msg =>
@@ -249,6 +289,65 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
         ui: {
           ...state.ui,
           chatInputEnabled: true,
+        },
+      };
+
+    // === Conversation History Actions ===
+    case 'CONVERSATIONS_LOADING':
+      return {
+        ...state,
+        conversations: {
+          ...state.conversations,
+          isLoading: true,
+        },
+      };
+
+    case 'CONVERSATIONS_LOADING_DONE':
+      return {
+        ...state,
+        conversations: {
+          ...state.conversations,
+          isLoading: false,
+        },
+      };
+
+    case 'CONVERSATIONS_SET_LIST': {
+      const combined = action.append
+        ? [...state.conversations.list, ...action.conversations]
+        : action.conversations;
+      // Deduplicate by ID (server list order can shift between fetches)
+      const seen = new Set<string>();
+      const deduped = combined.filter(c => {
+        if (seen.has(c.id)) return false;
+        seen.add(c.id);
+        return true;
+      });
+      return {
+        ...state,
+        conversations: {
+          ...state.conversations,
+          list: deduped,
+          isLoading: false,
+          hasMore: action.hasMore,
+        },
+      };
+    }
+
+    case 'CONVERSATIONS_TOGGLE_SIDEBAR':
+      return {
+        ...state,
+        conversations: {
+          ...state.conversations,
+          sidebarOpen: !state.conversations.sidebarOpen,
+        },
+      };
+
+    case 'CONVERSATIONS_REMOVE':
+      return {
+        ...state,
+        conversations: {
+          ...state.conversations,
+          list: state.conversations.list.filter(c => c.id !== action.conversationId),
         },
       };
 

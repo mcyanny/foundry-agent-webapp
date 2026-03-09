@@ -38,6 +38,9 @@ flowchart TB
     L -->|/api/agent| N[GetAgentMetadata]
     L -->|/api/agent/info| Q[GetAgentInfo]
     L -->|/api/health| O[GetHealth]
+    L -->|/api/conversations| R[ListConversations]
+    L -->|/api/conversations/*/messages| S[GetConversationMessages]
+    L -->|DELETE /api/conversations/*| T[DeleteConversation ⚠️ 501]
     L -->|/*| P[Fallback: index.html]
 ```
 
@@ -59,8 +62,26 @@ stateDiagram-v2
     }
 
     state Production {
-        [*] --> ManagedIdentity
-        ManagedIdentity --> CredentialReady: System-assigned
+        [*] --> CheckOBO
+        CheckOBO --> OBOMode: ENTRA_BACKEND_CLIENT_ID AND TenantId set
+        CheckOBO --> MIOnly: Not set
+
+        state OBOMode {
+            [*] --> ExtractJWT: Per-request
+            ExtractJWT --> GetFICAssertion: JWT found
+            ExtractJWT --> Error: No JWT (throws InvalidOperationException)
+            GetFICAssertion --> CreateOBO: ManagedIdentityClientAssertion
+            CreateOBO --> CredentialReady: OnBehalfOfCredential
+        }
+
+        note right of OBOMode
+            FIC created in postprovision.ps1 (not Bicep)
+            — Graph API eventual consistency prevents
+            creating FIC in same deployment as parent app.
+            User-assigned MI provides client assertion via FIC.
+        end note
+
+        MIOnly --> CredentialReady: User-assigned MI
     }
 
     CredentialReady --> CreateProjectClient
@@ -76,16 +97,16 @@ stateDiagram-v2
     NotLoaded --> Loading: First request calls GetAgentAsync
     Loading --> Loading: SemaphoreSlim acquired
 
-    Loading --> Loaded: _projectClient.GetAIAgentAsync success
+    Loading --> Loaded: GetProjectClient().GetAIAgentAsync success
     Loading --> Failed: Exception thrown
 
-    Loaded --> Loaded: Subsequent requests use _cachedAgent
+    Loaded --> Loaded: Subsequent requests use s_cachedAgent
     Failed --> Loading: Next request retries
 
     note right of Loaded
-        _cachedAgent: ChatClientAgent
-        _cachedMetadata: AgentMetadataResponse
-        Cached for service lifetime
+        s_cachedAgent: ChatClientAgent (static)
+        s_cachedMetadata: AgentMetadataResponse (static)
+        Cached across requests (not per-instance)
     end note
 ```
 
@@ -96,7 +117,7 @@ sequenceDiagram
     participant Client
     participant Handler as /api/chat/stream
     participant Service as AgentFrameworkService
-    participant SDK as ProjectResponsesClient
+    participant SDK as Azure.AI.Projects SDK
     participant Agent as AI Foundry
 
     Client->>Handler: POST ChatRequest
@@ -111,6 +132,7 @@ sequenceDiagram
     Handler-->>Client: data: {type: conversationId}
 
     Handler->>Service: StreamMessageAsync
+    Note over Service,SDK: ResponsesClient bound to conversationId —<br/>conversation tracks MCP approval state
     Service->>SDK: CreateResponseStreamingAsync
 
     loop StreamingResponseUpdate
@@ -207,6 +229,7 @@ stateDiagram-v2
 
     error --> idle: CHAT_CLEAR_ERROR
 
+    idle --> idle: CHAT_MCP_APPROVAL_RESOLVED
     idle --> idle: CHAT_CLEAR
 ```
 
@@ -214,7 +237,7 @@ stateDiagram-v2
 
 | State | Description | Input Enabled | streamingMessageId |
 |-------|-------------|---------------|-------------------|
-| `idle` | Ready for input | ✅ Yes | `undefined` |
+| `idle` | Ready for input | ✅ Yes (except during MCP approval) | `undefined` |
 | `sending` | Request in flight | ❌ No | `undefined` |
 | `streaming` | Receiving chunks | ❌ No | Message ID |
 | `error` | Failure occurred | If recoverable | `undefined` |
@@ -262,13 +285,18 @@ sequenceDiagram
         S->>R: CHAT_MCP_APPROVAL_REQUEST
         Note over R: status: idle<br/>Show approval UI
         U->>UI: Approve/Deny
-        UI->>S: streamChat (with approval)
-        Note over S: Resume streaming
+        UI->>R: CHAT_MCP_APPROVAL_RESOLVED
+        Note over R: Mark card approved/rejected
+        UI->>S: sendMcpApproval(id, approved, prevResponseId, convId)
+        Note over S: Resume via /api/chat/stream with mcpApproval
     end
 
-    API-->>S: data: {type: done, usage}
+    API-->>S: data: {type: usage}
     S->>R: CHAT_STREAM_COMPLETE
     Note over R: status: idle<br/>Input enabled
+
+    API-->>S: data: {type: done}
+    Note over S: Exits stream reader
 ```
 
 ---
@@ -293,10 +321,11 @@ stateDiagram-v2
 
     note right of awaiting_approval
         mcpApproval: {
-          toolName, arguments,
-          previousResponseId
+          id, toolName, serverLabel,
+          arguments, previousResponseId
         }
-        Input disabled
+        Conversation-bound client
+        maintains pending MCP state
     end note
 ```
 
@@ -380,11 +409,18 @@ flowchart LR
 | `CHAT_STREAM_CHUNK` | streaming | streaming | Append content to msg |
 | `CHAT_STREAM_ANNOTATIONS` | streaming | streaming | Add citations to msg |
 | `CHAT_MCP_APPROVAL_REQUEST` | streaming | idle | Add approval message, keep input disabled |
+| `CHAT_MCP_APPROVAL_RESOLVED` | idle | idle | Mark approval as approved/rejected |
 | `CHAT_STREAM_COMPLETE` | streaming | idle | Add usage, enable input |
 | `CHAT_CANCEL_STREAM` | streaming | idle | Enable input |
 | `CHAT_ERROR` | any | error | Set error, conditional input |
 | `CHAT_CLEAR_ERROR` | error | idle | Clear error, enable input |
 | `CHAT_CLEAR` | any | idle | Reset all chat state |
+| `CONVERSATIONS_LOADING` | any | (loading) | Set conversations loading state |
+| `CONVERSATIONS_SET_LIST` | any | (list updated) | Populate conversation list |
+| `CONVERSATIONS_TOGGLE_SIDEBAR` | any | (sidebar toggled) | Open/close conversation sidebar |
+| `CONVERSATIONS_REMOVE` | any | (list updated) | Remove conversation from list |
+| `CHAT_LOAD_MESSAGES` | any | (unchanged) | Append historical messages without changing status |
+| `CONVERSATIONS_LOADING_DONE` | any | (loading cleared) | Reset isLoading without clearing data |
 
 ### 2.8 SSE Event → Action Mapping
 
@@ -397,7 +433,7 @@ The `ChatService` translates backend SSE events into reducer actions:
 | `annotations` | `CHAT_STREAM_ANNOTATIONS` | Map `AnnotationInfo[]` to `IAnnotation[]` |
 | `mcpApprovalRequest` | `CHAT_MCP_APPROVAL_REQUEST` | Create approval message with `role: 'approval'` |
 | `usage` | `CHAT_STREAM_COMPLETE` | Extract token counts and duration |
-| `done` | `CHAT_STREAM_COMPLETE` | Finalize if no usage event received |
+| `done` | No action — exits stream reader | `usage` is the sole trigger for CHAT_STREAM_COMPLETE |
 | `error` | `CHAT_ERROR` | Wrap message in `AppError` object |
 
 ---
@@ -559,6 +595,10 @@ The backend follows strict async/await conventions:
 | `AI_AGENT_ENDPOINT` | .env | AI Foundry project URL | `https://....api.azureml.ms` |
 | `AI_AGENT_ID` | .env | Agent name (v2 API) | `my-agent` |
 | `ASPNETCORE_ENVIRONMENT` | Environment | Development/Production | `Development` |
+| `ENTRA_BACKEND_CLIENT_ID` | Container App env | Backend app ID for OBO | `59bc6af3-...` |
+| `MANAGED_IDENTITY_CLIENT_ID` | Container App env | User-assigned MI client ID for OBO (`OBO_MANAGED_IDENTITY_CLIENT_ID` is a deprecated alias) | `abc123-...` |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Container App env | Azure Monitor OpenTelemetry export (backend traces/metrics) | `InstrumentationKey=...` |
+| `APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING` | Docker build arg | Frontend browser telemetry (injected at build as `VITE_APPLICATIONINSIGHTS_CONNECTION_STRING`) | `InstrumentationKey=...` |
 
 The `.env` file is auto-generated by `postprovision.ps1` during `azd up` (after Bicep provisions the Entra app and infrastructure).
 

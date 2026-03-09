@@ -1,8 +1,10 @@
 import type { Dispatch } from 'react';
 import type { AppAction } from '../types/appState';
+import type { ConversationSummary, ConversationMessageInfo } from '../types/appState';
 import type { IChatItem } from '../types/chat';
 import type { AppError } from '../types/errors';
 import { isAppError } from '../types/errors';
+import { trackException } from './telemetry';
 import {
   createAppError,
   getErrorCodeFromMessage,
@@ -254,9 +256,14 @@ export class ChatService {
       this.currentStreamAbort = undefined;
       this.streamCancelled = false;
     } catch (error) {
+      this.currentStreamAbort = undefined;
+      this.streamCancelled = false;
+
       if (error instanceof DOMException && error.name === 'AbortError') {
         return;
       }
+
+      trackException(error instanceof Error ? error : new Error(String(error)), { context: 'sendMessage' });
 
       if (isTokenExpiredError(error)) {
         this.dispatch({ type: 'AUTH_TOKEN_EXPIRED' });
@@ -373,7 +380,7 @@ export class ChatService {
                   type: 'CHAT_MCP_APPROVAL_REQUEST',
                   messageId,
                   approvalRequest: event.data.approvalRequest,
-                  previousResponseId: newConversationId,
+                  previousResponseId: event.data.approvalRequest.previousResponseId ?? '',
                 });
               }
               break;
@@ -484,9 +491,14 @@ export class ChatService {
       this.currentStreamAbort = undefined;
       this.streamCancelled = false;
     } catch (error) {
+      this.currentStreamAbort = undefined;
+      this.streamCancelled = false;
+
       if (error instanceof DOMException && error.name === 'AbortError') {
         return;
       }
+
+      trackException(error instanceof Error ? error : new Error(String(error)), { context: 'sendMcpApproval' });
 
       const appError: AppError = isAppError(error)
         ? error
@@ -523,6 +535,63 @@ export class ChatService {
       this.streamCancelled = true;
       this.currentStreamAbort.abort();
       this.dispatch({ type: 'CHAT_CANCEL_STREAM' });
+    }
+  }
+
+  /**
+   * List all conversations from the server.
+   * @returns Array of conversation summaries
+   */
+  async listConversations(limit: number = 20): Promise<{ conversations: ConversationSummary[]; hasMore: boolean }> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/conversations?limit=${limit}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to list conversations: ${response.status}`), 'API');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Get messages for a specific conversation.
+   * @param conversationId - The conversation ID to fetch messages for
+   * @returns Array of conversation messages
+   */
+  async getConversationMessages(conversationId: string): Promise<ConversationMessageInfo[]> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/conversations/${conversationId}/messages`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to get conversation messages: ${response.status}`), 'API');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Delete a conversation.
+   * @param conversationId - The conversation ID to delete
+   */
+  async deleteConversation(conversationId: string): Promise<void> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/conversations/${conversationId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to delete conversation: ${response.status}`), 'API');
     }
   }
 }

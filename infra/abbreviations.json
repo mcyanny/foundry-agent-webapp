@@ -3,5 +3,7 @@
   "containerRegistryRegistries": "cr",
   "appManagedEnvironments": "cae-",
   "appContainerApps": "ca-",
-  "operationalInsightsWorkspaces": "law-"
+  "operationalInsightsWorkspaces": "law-",
+  "insightsComponents": "appi-",
+  "managedIdentityUserAssignedIdentities": "id-"
 }

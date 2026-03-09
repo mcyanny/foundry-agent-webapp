@@ -10,7 +10,7 @@ This skill covers writing unit tests for the backend using **MSTest SDK**. The p
 
 ## Project Structure
 
-```
+```text
 backend/
 ├── WebApp.sln
 ├── WebApp.Api/
@@ -26,18 +26,7 @@ backend/
 
 The test project uses MSTest SDK which eliminates the need for explicit package references:
 
-```xml
-<Project Sdk="MSTest.Sdk/3.10.2">
-  <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\WebApp.Api\WebApp.Api.csproj" />
-  </ItemGroup>
-</Project>
-```
+See `backend/WebApp.Api.Tests/WebApp.Api.Tests.csproj` for current configuration. The project uses MSTest SDK which eliminates the need for explicit package references — just set `Sdk="MSTest.Sdk/{version}"` in the project element.
 
 ## Test Anatomy
 

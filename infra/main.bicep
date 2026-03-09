@@ -22,6 +22,9 @@ param entraTenantId string = tenant().tenantId
 @description('Service Management Reference GUID (required by some orgs for Entra app registration)')
 param serviceManagementReference string = ''
 
+@description('Enable OBO (On-Behalf-Of) flow for user-delegated access to Agent Service (secretless via FIC)')
+param enableObo bool = false
+
 @description('Container image for web service (set by postprovision hook)')
 param webImageName string = 'mcr.microsoft.com/k8se/quickstart:latest'  // Placeholder during initial provision
 
@@ -55,13 +58,14 @@ module infrastructure 'main-infrastructure.bicep' = {
 }
 
 // Create Entra app registration (Microsoft Graph Bicep extension)
-// Creates with localhost-only redirect URIs; postprovision adds Container App FQDN
+// Creates with localhost-only redirect URIs; postprovision adds Container App FQDN + FIC
 module entraApp 'entra-app.bicep' = {
   name: 'entra-app'
   scope: rg
   params: {
     environmentName: environmentName
     serviceManagementReference: serviceManagementReference
+    enableObo: enableObo
   }
 }
 
@@ -79,7 +83,12 @@ module app 'main-app.bicep' = {
     aiAgentId: aiAgentId
     entraSpaClientId: entraApp.outputs.clientAppId
     entraTenantId: entraTenantId
+    entraBackendClientId: enableObo ? entraApp.outputs.backendClientAppId : ''
     webImageName: webImageName
+    userAssignedIdentityId: infrastructure.outputs.managedIdentityId
+    oboManagedIdentityClientId: infrastructure.outputs.managedIdentityClientId
+    appInsightsConnectionString: infrastructure.outputs.appInsightsConnectionString
+    appInsightsFrontendConnectionString: infrastructure.outputs.appInsightsFrontendConnectionString
   }
 }
 
@@ -92,6 +101,10 @@ output AZURE_CONTAINER_APPS_ENVIRONMENT_ID string = infrastructure.outputs.conta
 output AZURE_RESOURCE_GROUP_NAME string = rg.name
 output AZURE_CONTAINER_APP_NAME string = app.outputs.webAppName
 output WEB_ENDPOINT string = app.outputs.webEndpoint
-output WEB_IDENTITY_PRINCIPAL_ID string = app.outputs.webIdentityPrincipalId
+output WEB_IDENTITY_PRINCIPAL_ID string = infrastructure.outputs.managedIdentityPrincipalId
 output ENTRA_SPA_CLIENT_ID string = entraApp.outputs.clientAppId
 output ENTRA_APP_OBJECT_ID string = entraApp.outputs.appObjectId
+output ENTRA_BACKEND_CLIENT_ID string = enableObo ? entraApp.outputs.backendClientAppId : ''
+output ENTRA_BACKEND_APP_OBJECT_ID string = enableObo ? entraApp.outputs.backendAppObjectId : ''
+output APPLICATIONINSIGHTS_CONNECTION_STRING string = infrastructure.outputs.appInsightsConnectionString
+output APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING string = infrastructure.outputs.appInsightsFrontendConnectionString

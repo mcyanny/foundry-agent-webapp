@@ -29,7 +29,7 @@ description: Provides step-by-step procedures for validating UI features - theme
 Verify the Settings panel opens and theme switching works correctly.
 
 ### UI Flow
-```
+```text
 ChatInput toolbar → Settings button (gear) → SettingsPanel drawer → ThemePicker dropdown
 ```
 
@@ -56,7 +56,7 @@ ChatInput toolbar → Settings button (gear) → SettingsPanel drawer → ThemeP
 14. **Close** Settings panel (X button or click outside)
 
 ### Console Evidence
-```
+```javascript
 // No errors should appear
 // LocalStorage updated:
 localStorage.getItem('ai-foundry-theme') // "Dark", "Light", or "System"
@@ -80,7 +80,7 @@ localStorage.getItem('ai-foundry-theme') // "Dark", "Light", or "System"
 Verify the New Chat button clears messages and resets conversation state.
 
 ### UI Flow
-```
+```text
 Send message → Wait for response → Click New Chat button → Verify reset
 ```
 
@@ -100,7 +100,7 @@ Send message → Wait for response → Click New Chat button → Verify reset
    - New Chat button now **disabled** (no messages to clear)
 
 ### Console Evidence
-```
+```javascript
 🔄 [timestamp] CHAT_CLEAR
 Action: {type: CHAT_CLEAR}
 Changes: {
@@ -125,7 +125,7 @@ Changes: {
 Verify streaming can be cancelled mid-response.
 
 ### UI Flow
-```
+```text
 Send long prompt → While streaming → Click Stop button → Verify cancellation
 ```
 
@@ -133,7 +133,7 @@ Send long prompt → While streaming → Click Stop button → Verify cancellati
 
 1. **Start** a new chat (or use existing)
 2. **Send** a prompt that triggers a long code response:
-   ```
+   ```text
    Write a comprehensive Python script that calculates Fibonacci numbers using 5 different methods: recursive, memoized, iterative, matrix exponentiation, and Binet's formula. Include detailed docstrings, type hints, performance benchmarks, and unit tests for each method.
    ```
 3. **Immediately observe**:
@@ -153,7 +153,7 @@ Send long prompt → While streaming → Click Stop button → Verify cancellati
 - Press `Escape` key during streaming → should also cancel
 
 ### Console Evidence
-```
+```javascript
 🔄 [timestamp] CHAT_CANCEL_STREAM
 Action: {type: CHAT_CANCEL_STREAM}
 Changes: {
@@ -183,7 +183,7 @@ Changes: {
 Verify code blocks render with syntax highlighting, line numbers, and copy button.
 
 ### UI Flow
-```
+```text
 Send code request → Wait for response → Verify code block UI
 ```
 
@@ -191,7 +191,7 @@ Send code request → Wait for response → Verify code block UI
 
 1. **Start** a new chat
 2. **Send** a code generation prompt:
-   ```
+   ```text
    Write a Python function to calculate fibonacci numbers with proper type hints
    ```
 3. **Wait** for response to complete
@@ -254,7 +254,7 @@ Verify tables, lists, headings, and text formatting render correctly.
 ### Steps
 
 1. **Send** a complex markdown prompt:
-   ```
+   ```text
    Create a comprehensive guide with:
    - A comparison table of React, Vue, and Angular
    - Numbered installation steps
@@ -295,7 +295,7 @@ Verify tables, lists, headings, and text formatting render correctly.
 Verify response footer shows timing, token counts, and expandable usage details.
 
 ### UI Flow
-```
+```text
 Send message → Wait for response → Verify footer → Click expand → Verify breakdown
 ```
 
@@ -313,7 +313,7 @@ Send message → Wait for response → Verify footer → Click expand → Verify
    - Output tokens (e.g., `Output: 49 tokens`)
 
 ### Console Evidence
-```
+```javascript
 Action: {type: CHAT_STREAM_COMPLETE, usage: Object}
 // usage object: { promptTokens, completionTokens, totalTokens }
 ```
@@ -354,7 +354,7 @@ Action: {type: CHAT_STREAM_COMPLETE, usage: Object}
 
 ## Quick Validation Checklist
 
-```
+```text
 □ Theme Toggle
   □ Settings opens
   □ Dark theme works

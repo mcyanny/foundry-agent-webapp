@@ -31,3 +31,16 @@ public record FileAttachmentInfo(
     string FileName,
     long FileSizeBytes
 );
+
+public record ConversationSummary
+{
+    public required string Id { get; init; }
+    public string? Title { get; init; }
+    public long CreatedAt { get; init; }
+}
+
+public record ConversationMessageInfo
+{
+    public required string Role { get; init; }
+    public required string Content { get; init; }
+}

@@ -1,6 +1,6 @@
 ---
 name: writing-csharp-code
-description: Provides C# and ASP.NET Core coding standards for this repository. Use when writing or modifying C# code, implementing API endpoints, configuring middleware, or working with authentication in the backend. Use when writing or modifying C# code, implementing API endpoints,
+description: Provides C# and ASP.NET Core coding standards for this repository. Use when writing or modifying C# code, implementing API endpoints, configuring middleware, or working with authentication in the backend.
 ---
 
 # C# Coding Standards
@@ -99,7 +99,7 @@ TokenCredential credential = env.IsDevelopment()
     ? new ChainedTokenCredential(
         new AzureCliCredential(),
         new AzureDeveloperCliCredential())  // Supports 'azd auth login'
-    : new ManagedIdentityCredential();      // System-assigned in production
+    : new ManagedIdentityCredential(miClientId); // User-assigned MI in production
 ```
 
 **Why ChainedTokenCredential**: Avoids `DefaultAzureCredential`'s "fail fast" mode issues. Explicit, predictable credential chain.
@@ -169,8 +169,8 @@ app.MapFallbackToFile("index.html");  // MUST BE LAST
 **See**: `backend/WebApp.Api/Services/AgentFrameworkService.cs`
 
 **SDK Packages**:
-- `Azure.AI.Projects` v1.2.0-beta.5 — Main entry point, v2 Agents API
-- `Microsoft.Agents.AI.AzureAI` v1.0.0-rc1 — Agent Framework extensions
+- `Azure.AI.Projects` — Main entry point, v2 Agents API (see `*.csproj` for version)
+- `Microsoft.Agents.AI.AzureAI` — Agent Framework extensions (see `*.csproj` for version)
 
 **Sub-namespaces**: `Azure.AI.Projects.OpenAI`, `OpenAI.Responses`, `Microsoft.Agents.AI`, `Microsoft.Extensions.AI`
 
@@ -249,8 +249,8 @@ if (File.Exists(envFile))
 
 **When things break**: SDK type mismatches and missing methods almost always happen after a package upgrade. Check `backend/WebApp.Api/WebApp.Api.csproj` for current versions:
 
-- `Azure.AI.Projects` - currently `1.2.0-beta.5`
-- `Azure.Identity` - currently `1.17.1`
+- `Azure.AI.Projects` - check `WebApp.Api.csproj` for current version
+- `Azure.Identity` - check `WebApp.Api.csproj` for current version
 
 If types don't match documentation or samples, verify you're looking at docs for the **same version** installed in the project.
 

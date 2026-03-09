@@ -13,20 +13,20 @@
 
 ## Logging
 
-All hooks now start a PowerShell transcript automatically and write logs to `.azure/<env>/logs/` with timestamped filenames (one per hook run). The transcript captures the same console output shown during `azd` execution for post-run troubleshooting.
+All hooks start a PowerShell transcript automatically and write logs to `.azure/<env>/logs/` with timestamped filenames (one per hook run). The transcript captures the same console output shown during `azd` execution for post-run troubleshooting.
 
 ## Hook Details
 
 | Hook | Purpose | Key Actions | Outputs |
 |------|---------|-------------|---------|
 | **preprovision.ps1** | Discover AI Foundry + configure agent | • Discovers AI Foundry resources<br>• Auto-detects tenant ID<br>• Discovers agent in project | AI Foundry env vars |
-| **postprovision.ps1** | Configure Entra app + RBAC + local config | • Sets `identifierUri` on Entra app (can't be done in Bicep — self-references `appId`)<br>• Updates redirect URIs with production URL<br>• Assigns Cognitive Services User role to AI Foundry<br>• Generates local dev config files (`.env`, `.env.local`) | Configured Entra app + RBAC + local config |
-| **predeploy.ps1** | Build container image | • Detects Docker availability<br>• Local Docker build + push OR ACR cloud build<br>• Updates Container App if it exists | Container image in ACR |
+| **postprovision.ps1** | Configure Entra app + RBAC + local config | • Sets `identifierUri` on Entra app (can't be done in Bicep — self-references `appId`)<br>• Updates redirect URIs with production URL<br>• Assigns `Cognitive Services OpenAI Contributor` + `Azure AI Developer` roles to AI Foundry<br>• Generates local dev config files (`.env`, `.env.local`) | Configured Entra app + RBAC + local config |
+| **predeploy.ps1** | Build container image | • Detects Docker availability<br>• Passes `APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING` as Docker build arg for frontend browser telemetry<br>• Local Docker build + push OR ACR cloud build<br>• Updates Container App if it exists | Container image in ACR |
 | **postdown.ps1** | Cleanup (optional) | • Removes RBAC assignment<br>• Deletes Entra app (Graph resources aren't tied to RGs)<br>• Optionally removes Docker images | Clean slate |
 
 ## Entra App Registration
 
-The Entra app is created **declaratively via Bicep** (`infra/entra-app.bicep`) using the Microsoft Graph Bicep extension (GA since July 2025). This replaces the previous `New-EntraAppRegistration.ps1` script.
+The Entra app is created **declaratively via Bicep** (`infra/entra-app.bicep`) using the Microsoft Graph Bicep extension.
 
 **What Bicep handles**: App creation, display name, sign-in audience, SPA redirect URIs (localhost only), `Chat.ReadWrite` scope, service principal, and `serviceManagementReference`.
 
@@ -74,7 +74,7 @@ azd up
 | App registration fails with policy error | Run `azd env set ENTRA_SERVICE_MANAGEMENT_REFERENCE 'guid'` then `azd up` (Bicep passes it to Microsoft Graph extension) |
 | Provision fails | Verify Azure CLI auth: `az account show` |
 | Predeploy Docker build fails | Check Docker running: `docker version` (falls back to ACR cloud build) |
-| AI Foundry not found | Create resource at https://ai.azure.com |
+| AI Foundry not found | Create resource at [ai.azure.com](https://ai.azure.com) or use [foundry-samples Bicep templates](https://github.com/microsoft-foundry/foundry-samples/tree/main/infrastructure/infrastructure-setup-bicep) |
 | Multiple AI Foundry resources | Set `AI_FOUNDRY_RESOURCE_NAME` or select when prompted |
 | RBAC assignment fails | Verify you have User Access Administrator role on AI Foundry resource |
 
@@ -101,7 +101,7 @@ Contact your Entra ID admin for the required GUID.
 If you have multiple AI Foundry resources in your subscription, the preprovision hook will prompt you to select one. 
 
 **To skip the prompt**, pre-configure your preferred resource:
-```bash
+```powershell
 azd env set AI_FOUNDRY_RESOURCE_NAME "your-ai-foundry-resource-name"
 ```
 

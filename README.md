@@ -61,7 +61,7 @@ The `azd up` command:
 ### Azure Requirements
 - **Azure Subscription** with Contributor role
 - **Bicep CLI** - Installed automatically with `azd`, or manually: `az bicep install`
-- **Microsoft Foundry Resource** - Create at https://ai.azure.com with at least one agent
+- **Microsoft Foundry Resource** with a project and at least one v2 agent — create via [ai.azure.com](https://ai.azure.com) or deploy infrastructure with [microsoft-foundry/foundry-samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/infrastructure/infrastructure-setup-bicep) Bicep templates
 
 > **Note**: Docker is optional. If not installed, `azd` automatically uses Azure Container Registry cloud build for deployment.
 
@@ -78,9 +78,7 @@ registry=https://your-registry.example.com/
 
 ### Organization-Specific Requirements
 
-If your organization requires a Service Management Reference for Entra ID app registrations, set it before deploying:
-
-For non-interactive environments (CI/CD), set it before deploying:
+If your organization requires a Service Management Reference for Entra ID app registrations:
 
 ```powershell
 azd env set ENTRA_SERVICE_MANAGEMENT_REFERENCE "<guid-from-admin>"
@@ -136,7 +134,7 @@ The workspace includes optimized VS Code configuration for AI-assisted developme
 
 - **1 resource found**: Auto-selects and configures RBAC
 - **Multiple resources found**: Prompts you to select which one to use
-- **RBAC**: Automatically grants the Container App's managed identity "Cognitive Services User" role
+- **RBAC**: Automatically grants the Container App's managed identity `Cognitive Services OpenAI Contributor` + `Azure AI Developer` roles
 
 **Change AI Foundry resource**:
 ```powershell
@@ -202,11 +200,8 @@ azd deploy  # 3-5 minutes
 ### Known Limitations
 
 - **Office Documents**: DOCX, PPTX, and XLSX files are not supported for upload. Use PDF, images, or plain text files instead.
-- **Beta SDK**: This application uses Azure.AI.Projects SDK v1.2.0-beta.5. Some features may change before general availability.
+- **Beta SDK**: This application uses pre-release Azure SDK packages. Check `backend/WebApp.Api/WebApp.Api.csproj` for current versions.
 - **npm Peer Dependencies**: React 19 has peer dependency conflicts with some packages. If adding packages that have peer dependencies (like `yjs` for `@lexical/yjs`), you must add them explicitly to `package.json`. Run `npm ci` locally to verify before committing.
-
-For tracking feature updates, see issue [#14](https://github.com/microsoft-foundry/foundry-agent-webapp/issues/14).
-
 
 
 ## Commands
@@ -262,18 +257,106 @@ This template deploys the following Azure resources:
 
 - **Azure Container Apps** - Serverless container hosting (0.5 vCPU, 1GB RAM, scale-to-zero enabled)
 - **Azure Container Registry** - Private container image storage (Basic tier)
-- **Log Analytics Workspace** - Application logging and monitoring
-- **Managed Identity** - System-assigned identity with RBAC to Foundry resource
+- **Log Analytics Workspace** - Centralized logging (30-day retention)
+- **Application Insights (Backend)** - OpenTelemetry traces, metrics, and distributed tracing (`APPLICATIONINSIGHTS_CONNECTION_STRING` env var)
+- **Application Insights (Frontend)** - Browser telemetry via `@microsoft/applicationinsights-web` (separate resource to isolate browser metrics from server metrics)
+- **User-Assigned Managed Identity** - `isolationScope: Regional` — used for ACR pull, AI Foundry RBAC, and OBO FIC. No admin credentials or secrets.
 
-**Local development requires no Azure resources** - runs natively without Docker or cloud dependencies.
+All resources deploy to the same region (`AZURE_LOCATION`). The managed identity's regional isolation ensures it can only be assigned to compute resources in the deployment region.
 
+> **Region tip**: For best resilience, deploy to the **same region** as your AI Foundry resource. The `preprovision` hook warns if regions don't match. To align: `azd env set AZURE_LOCATION <your-ai-foundry-region>`
 
+## Authentication & Identity
 
+### Default: Managed Identity (Zero-Touch)
 
+By default, `azd up` configures everything automatically:
+
+| Component | Identity | How |
+|-----------|----------|-----|
+| Frontend → Backend | User's Entra ID token (MSAL.js PKCE) | SPA app registration created by Bicep |
+| Backend → Agent Service | Container App's managed identity | User-assigned MI + RBAC (see [Azure Resources](#azure-resources-provisioned)) |
+
+The managed identity has `Cognitive Services OpenAI Contributor` + `Azure AI Developer` roles on the AI Foundry resource. All agent tool calls (MCP, OpenAPI, Logic Apps) use the **agent's own identity** configured in the Foundry portal — NOT the web app's identity and NOT the user's identity.
+
+**Scope requested by `AIProjectClient`**: `https://ai.azure.com/.default`
+
+### Advanced: On-Behalf-Of (OBO) — Opt-In
+
+OBO replaces the managed identity with the **user's own identity** for Agent Service API calls. This gives you per-user audit trails and rate limiting but adds enterprise friction.
+
+> **⚠️ Important**: OBO does NOT pass the user's identity to agent tools. Tool authentication (MCP servers, OpenAPI endpoints, Logic Apps) is controlled by the [Agent Identity](https://learn.microsoft.com/azure/ai-foundry/agents/concepts/agent-identity) configured in the Foundry portal. OBO only affects who the Agent Service API sees as the caller.
+
+#### How OBO Works (Secretless via Federated Identity Credential)
+
+```text
+┌──────────┐  JWT (user)  ┌──────────────┐  OBO token (user)  ┌──────────────┐
+│ Frontend │ ────────────►│ Backend API  │ ──────────────────►│ Agent Service│
+│ (MSAL.js)│              │ (ASP.NET)    │                     │ (Foundry)    │
+└──────────┘              └──────────────┘                     └──────────────┘
+                                │
+                                │ 1. ManagedIdentityClientAssertion
+                                │    → gets MI token (audience: api://AzureADTokenExchange)
+                                │
+                                │ 2. OnBehalfOfCredential(tenantId, backendClientId,
+                                │      miAssertionCallback, userJWT)
+                                │    → exchanges user JWT for OBO token
+                                │    → scope: https://ai.azure.com/.default
+                                │
+                                │ No secrets! MI token replaces client secret.
+```
+
+**References**:
+- [OBO flow protocol](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-on-behalf-of-flow)
+- [Federated Identity Credentials (FIC) with managed identities](https://learn.microsoft.com/entra/workload-id/workload-identity-federation-config-app-trust-managed-identity)
+- [ManagedIdentityClientAssertion](https://learn.microsoft.com/entra/msal/dotnet/acquiring-tokens/web-apps-apis/workload-identity-federation)
+- [Agent Identity in Foundry](https://learn.microsoft.com/azure/ai-foundry/agents/concepts/agent-identity)
+
+#### Enable OBO
+
+```powershell
+azd env set ENABLE_OBO true
+azd up
+```
+
+This creates a backend API app registration with FIC, sets `api://{backendClientId}` identifier URI, and attempts admin consent. If consent fails, follow the printed instructions.
+
+#### RBAC & Consent Requirements
+
+| Requirement | Who | What | Why |
+|-------------|-----|------|-----|
+| **FIC creation** | Deployer | `Application Administrator` role in Entra ID | To create the federated identity credential on the backend app |
+| **Admin consent** | Entra admin | Grant **Azure Machine Learning Services / `user_impersonation`** delegated permission | The OBO token exchange requests `https://ai.azure.com/.default` which resolves to Azure Machine Learning Services (appId: `18a66f5f-dbdf-4c17-9dd7-1634712a9cbe`). Without admin consent, token acquisition fails with `AADSTS65001`. |
+| **User RBAC** | Each user | `Azure AI User` role on the Foundry resource | OBO tokens carry the user's identity; the user needs data-plane permissions ([docs](https://learn.microsoft.com/azure/ai-foundry/concepts/rbac-foundry)) |
+| **Known client** | Deployer (optional) | Add SPA client ID to backend app's `knownClientApplications` | Enables combined consent prompt so users consent to both SPA + backend in one step ([docs](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-on-behalf-of-flow#default-and-combined-consent)) |
+
+> **⚠️ Common mistake: consenting to the wrong service.** The Azure portal shows "Microsoft Cognitive Services" (`https://cognitiveservices.azure.com`, appId: `7d312290-...`) which looks like the right choice — but `AIProjectClient` actually requests tokens for `https://ai.azure.com/.default` which maps to **Azure Machine Learning Services** (appId: `18a66f5f-dbdf-4c17-9dd7-1634712a9cbe`). These are **different first-party service principals**. You must consent to the correct one:
+>
+> ```bash
+> # Add the CORRECT permission (Azure Machine Learning Services, not Cognitive Services)
+> az ad app permission add \
+>   --id <your-backend-app-id> \
+>   --api 18a66f5f-dbdf-4c17-9dd7-1634712a9cbe \
+>   --api-permissions 1a7925b5-f871-417a-9b8b-303f9f29fa10=Scope
+>
+> # Then grant admin consent
+> az ad app permission admin-consent --id <your-backend-app-id>
+> ```
+>
+> Or in the portal: API permissions → Add → "APIs my organization uses" → search **"Azure Machine Learning"** → `user_impersonation` (Delegated).
+
+#### OBO Gotchas
+
+| Gotcha | Detail |
+|--------|--------|
+| **Wrong consent target** | Portal shows "Microsoft Cognitive Services" (`cognitiveservices.azure.com`, appId `7d312290-...`) — this is NOT correct. `AIProjectClient` uses `ai.azure.com/.default` → **Azure Machine Learning Services** (appId `18a66f5f-...`). Consenting to wrong one gives green checkmark but runtime `AADSTS65001`. |
+| **Tool identity is separate** | OBO only affects the Agent Service API caller. Agent tools (MCP, OpenAPI, Logic Apps) use the agent's identity from Foundry portal. Configure [Agent Identity](https://learn.microsoft.com/azure/ai-foundry/agents/concepts/agent-identity) separately for per-user tool access. |
+| **Conversations not user-scoped in MI mode** | MI uses a shared identity — all users see all conversations. OBO provides per-user isolation. |
+| **Local dev uses CLI credentials** | OBO requires a managed identity for FIC. Locally, the app uses `az login` credentials regardless of `ENTRA_BACKEND_CLIENT_ID`. |
 
 ## Project Structure
 
-```
+```text
 ├── backend/WebApp.Api/          # ASP.NET Core API + serves frontend
 ├── frontend/                     # React + TypeScript + Vite
 ├── infra/                        # Bicep infrastructure templates
@@ -284,11 +367,5 @@ This template deploys the following Azure resources:
 └── .github/
     ├── copilot-instructions.md   # Architecture overview (always loaded)
     ├── hooks/                    # Agent hooks (commit gate, custom policies)
-    ├── skills/                   # On-demand AI assistant guidance
-    │   ├── understanding-architecture/
-    │   ├── deploying-to-azure/
-    │   ├── writing-csharp-code/
-    │   ├── writing-typescript-code/
-    │   └── ...                   # 18 skills total
     └── skills/                   # 18 on-demand AI assistant skills
 ```

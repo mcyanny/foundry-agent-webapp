@@ -20,12 +20,15 @@ if ($webIdentityPrincipalId -and $aiFoundryResourceGroup -and $aiFoundryResource
     
     $scope = "/subscriptions/$subscriptionId/resourceGroups/$aiFoundryResourceGroup/providers/Microsoft.CognitiveServices/accounts/$aiFoundryResourceName"
     
-    az role assignment delete `
-        --assignee $webIdentityPrincipalId `
-        --role "Cognitive Services User" `
-        --scope $scope 2>&1 | Out-Null
-    
-    Write-Host "[OK] Role assignment removed (if it existed)" -ForegroundColor Green
+    $roles = @("Cognitive Services User", "Cognitive Services OpenAI Contributor", "Azure AI Developer")
+    foreach ($roleName in $roles) {
+        az role assignment delete `
+            --assignee $webIdentityPrincipalId `
+            --role $roleName `
+            --scope $scope 2>&1 | Out-Null
+        
+        Write-Host "[OK] $roleName — removed (if it existed)" -ForegroundColor Green
+    }
 }
 
 # Delete Entra app (Graph resources are NOT tied to Azure resource groups — azd down won't clean them up)

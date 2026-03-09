@@ -11,6 +11,9 @@ if (!clientId) {
   );
 }
 
+// When OBO is enabled, scopes target the backend API app instead of the SPA
+const scopeClientId = import.meta.env.VITE_ENTRA_BACKEND_CLIENT_ID || clientId;
+
 const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID;
 
 if (!tenantId) {
@@ -58,10 +61,10 @@ export const msalConfig: Configuration = {
 
 // API permission scope (will match app registration in Step 08)
 export const loginRequest = {
-  scopes: [`api://${clientId}/Chat.ReadWrite`],
+  scopes: [`api://${scopeClientId}/Chat.ReadWrite`],
 };
 
 export const tokenRequest = {
-  scopes: [`api://${clientId}/Chat.ReadWrite`],
+  scopes: [`api://${scopeClientId}/Chat.ReadWrite`],
   forceRefresh: false, // Use cached token if valid
 };

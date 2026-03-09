@@ -17,7 +17,7 @@ description: Provides Playwright MCP testing workflow for the web application. U
 
 ### Delegation Pattern
 
-```
+```text
 runSubagent(
   prompt: "TESTING task with Playwright MCP.
     
@@ -102,7 +102,7 @@ runSubagent(
 ## State Logging (Dev Mode)
 
 Each state change prints:
-```
+```text
 🔄 [HH:MM:SS] ACTION_TYPE
 Action: { … }
 Changes: { field: before → after }

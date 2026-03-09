@@ -11,6 +11,7 @@ interface McpApprovalCardProps {
   onApprove: () => void;
   onReject: () => void;
   disabled?: boolean;
+  resolved?: 'approved' | 'rejected';
   agentName?: string;
   agentLogo?: string;
 }
@@ -22,6 +23,7 @@ export const McpApprovalCard: React.FC<McpApprovalCardProps> = ({
   onApprove,
   onReject,
   disabled,
+  resolved,
   agentName = 'AI Assistant',
   agentLogo,
 }) => {
@@ -34,7 +36,9 @@ export const McpApprovalCard: React.FC<McpApprovalCardProps> = ({
     >
       <div className={styles.content}>
         <Text className={styles.title}>
-          I need your approval to use an external tool
+          {resolved
+            ? `External tool ${resolved === 'approved' ? 'approved' : 'rejected'}`
+            : 'I need your approval to use an external tool'}
         </Text>
         
         <div className={styles.details}>
@@ -58,22 +62,30 @@ export const McpApprovalCard: React.FC<McpApprovalCardProps> = ({
           )}
         </div>
         
-        <div className={styles.actions}>
-          <Button 
-            appearance="primary"
-            onClick={onApprove} 
-            disabled={disabled}
-          >
-            Approve
-          </Button>
-          <Button 
-            appearance="secondary"
-            onClick={onReject} 
-            disabled={disabled}
-          >
-            Reject
-          </Button>
-        </div>
+        {resolved ? (
+          <div className={styles.resolvedStatus}>
+            <Text weight="semibold">
+              {resolved === 'approved' ? '✓ Approved' : '✗ Rejected'}
+            </Text>
+          </div>
+        ) : (
+          <div className={styles.actions}>
+            <Button 
+              appearance="primary"
+              onClick={onApprove} 
+              disabled={disabled}
+            >
+              Approve
+            </Button>
+            <Button 
+              appearance="secondary"
+              onClick={onReject} 
+              disabled={disabled}
+            >
+              Reject
+            </Button>
+          </div>
+        )}
       </div>
     </CopilotMessage>
   );
