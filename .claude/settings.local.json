@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(dotnet --version)",
+      "Bash(az --version)",
+      "Bash(azd version:*)",
+      "Bash(docker --version)",
+      "Bash(pwsh --version)",
+      "Bash(brew --version)"
+    ]
+  }
+}

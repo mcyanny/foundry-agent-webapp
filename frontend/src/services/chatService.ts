@@ -42,10 +42,10 @@ import { parseSseLine, splitSseBuffer } from '../utils/sseParser';
 export class ChatService {
   private apiUrl: string;
   private getAccessToken: () => Promise<string | null>;
-  private dispatch: Dispatch<AppAction>;
-  private currentStreamAbort?: AbortController;
+  protected dispatch: Dispatch<AppAction>;
+  protected currentStreamAbort?: AbortController;
   // Flag indicating an intentional user cancellation of the active stream.
-  private streamCancelled = false;
+  protected streamCancelled = false;
 
   constructor(
     apiUrl: string,

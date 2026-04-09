@@ -1,3 +1,4 @@
+
 # CLAUDE.md — foundry-agent-webapp
 
 This file provides Claude Code with the context needed to work effectively in this repository. Read it fully before making changes.
@@ -94,6 +95,75 @@ foundry-agent-webapp/
 **Key dependencies** (see `*.csproj` and `package.json` for current versions):
 - Backend: `Azure.AI.Projects`, `Microsoft.Agents.AI.AzureAI`, `Azure.Identity`, `Microsoft.Identity.Web`
 - Frontend: `react`, `@azure/msal-react`, `@azure/msal-browser`, `@fluentui/react-components`, `vite`
+
+---
+
+## Mock Mode — Frontend-Only Development
+
+**Use this when**: working on UI components, styling, state management, or any frontend feature that doesn't require a real agent response. No Azure account, no `.env` files, no backend needed.
+
+### Enabling Mock Mode
+
+`frontend/.env.local` already contains the toggle:
+
+```ini
+VITE_MOCK_MODE=true
+```
+
+That single line is all that's needed. Start the frontend normally:
+
+```bash
+cd frontend
+npm install
+npm run dev
+# → http://localhost:5173
+```
+
+### What Mock Mode Does
+
+| Layer | Real Mode | Mock Mode |
+|-------|-----------|-----------|
+| Auth | MSAL PKCE → Azure AD redirect | Stub user auto-authenticated, no redirect |
+| Token | `acquireTokenSilent` / popup | Returns `"mock-token"` immediately |
+| API | `POST /api/chat/stream` → ASP.NET Core → Azure AI Foundry | `MockChatService` simulates word-by-word streaming locally |
+| Backend | Required (port 8080) | Not required |
+| `.env` files | Required | Not required |
+
+The simulated stream cycles through 3 canned responses that demonstrate markdown rendering, code blocks, and tables. The Stop button, message queue, New Chat, Regenerate, and Edit all work normally — `MockChatService` dispatches the same reducer actions as the real service.
+
+### How It Works (Implementation)
+
+The mock mode path in `main.tsx`:
+
+```
+MsalProvider (placeholder creds — never used for real tokens)
+  └── MockAppProvider  (immediately dispatches AUTH_INITIALIZED with stub user)
+        └── ThemeProvider
+              └── MockApp  (renders AgentChat directly, skips useMsalAuthentication)
+                    └── AgentChat  (uses MockChatService instead of ChatService)
+```
+
+Key files:
+- `frontend/src/mock/MockApp.tsx` — renders `AgentChat` without auth boilerplate
+- `frontend/src/mock/mockChatService.ts` — `MockChatService extends ChatService`, overrides `sendMessage` / `cancelStream` / conversation methods
+- `frontend/src/contexts/AppContext.tsx` → `MockAppProvider` — no `useMsal()`, immediately sets `auth.status = 'authenticated'`
+- `frontend/src/hooks/useAuth.ts` — returns `"mock-token"` when `VITE_MOCK_MODE=true`
+- `frontend/plugins/envcheck.ts` — skips missing-env-var check when `VITE_MOCK_MODE=true`
+
+### Disabling Mock Mode
+
+To connect a real Azure AI Foundry agent:
+
+```bash
+# Option 1: remove the file
+rm frontend/.env.local
+
+# Option 2: set the flag to false in frontend/.env.local
+# VITE_MOCK_MODE=false
+
+# Then provision Azure resources (generates real .env files)
+azd up
+```
 
 ---
 

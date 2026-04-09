@@ -59,6 +59,9 @@ export function envCheckPlugin(): Plugin {
     configResolved(config) {
       if (config.command !== "serve") return;
 
+      // Skip env validation entirely in mock mode — no Azure credentials needed
+      if (config.env["VITE_MOCK_MODE"] === "true") return;
+
       missing = REQUIRED_VARS.filter(
         (v) => !process.env[v] || process.env[v] === "undefined"
       );

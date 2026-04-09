@@ -5,6 +5,7 @@ import { SettingsPanel } from './core/SettingsPanel';
 import { useAppState } from '../hooks/useAppState';
 import { useAuth } from '../hooks/useAuth';
 import { ChatService } from '../services/chatService';
+import { MockChatService } from '../mock/mockChatService';
 import { useAppContext } from '../contexts/AppContext';
 import { exportAsMarkdown, downloadMarkdown } from '../utils/exportConversation';
 import { trackFeedback } from '../services/telemetry';
@@ -27,10 +28,13 @@ export const AgentChat: React.FC<AgentChatProps> = ({ agentName, agentDescriptio
 
   // Create service instances
   const apiUrl = import.meta.env.VITE_API_URL || '/api';
-  
+  const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === 'true';
+
   const chatService = useMemo(() => {
-    return new ChatService(apiUrl, getAccessToken, dispatch);
-  }, [apiUrl, getAccessToken, dispatch]);
+    return MOCK_MODE
+      ? new MockChatService(dispatch)
+      : new ChatService(apiUrl, getAccessToken, dispatch);
+  }, [MOCK_MODE, apiUrl, getAccessToken, dispatch]);
 
   const handleSendMessage = async (text: string, files?: File[]) => {
     if (chat.status === 'streaming' || chat.status === 'sending') {

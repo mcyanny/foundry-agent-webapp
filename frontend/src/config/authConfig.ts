@@ -1,10 +1,17 @@
 import type { Configuration } from "@azure/msal-browser";
 import { LogLevel } from "@azure/msal-browser";
 
-// Environment variables (must be set during build or deployment)
-const clientId = import.meta.env.VITE_ENTRA_SPA_CLIENT_ID;
+// In mock mode MSAL is initialized with placeholder values but never used for real token
+// acquisition — the mock auth path returns a stub token and skips all Azure AD calls.
+const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === "true";
+const MOCK_CLIENT_ID = "00000000-0000-0000-0000-000000000001";
+const MOCK_TENANT_ID = "00000000-0000-0000-0000-000000000002";
 
-if (!clientId) {
+const clientId = MOCK_MODE
+  ? MOCK_CLIENT_ID
+  : import.meta.env.VITE_ENTRA_SPA_CLIENT_ID;
+
+if (!clientId && !MOCK_MODE) {
   throw new Error(
     "VITE_ENTRA_SPA_CLIENT_ID is not set. This must be provided during build time. " +
     "For local dev, ensure azd environment is configured and run preprovision hook."
@@ -14,9 +21,11 @@ if (!clientId) {
 // When OBO is enabled, scopes target the backend API app instead of the SPA
 const scopeClientId = import.meta.env.VITE_ENTRA_BACKEND_CLIENT_ID || clientId;
 
-const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID;
+const tenantId = MOCK_MODE
+  ? MOCK_TENANT_ID
+  : import.meta.env.VITE_ENTRA_TENANT_ID;
 
-if (!tenantId) {
+if (!tenantId && !MOCK_MODE) {
   throw new Error(
     "VITE_ENTRA_TENANT_ID is not set. This must be provided during build time. " +
     "For local dev, run setup-local-dev.ps1 to configure from azd environment."

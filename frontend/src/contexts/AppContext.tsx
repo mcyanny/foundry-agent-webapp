@@ -1,6 +1,7 @@
 import { createContext, useContext, useReducer, useEffect, useMemo } from 'react';
 import type { ReactNode, Dispatch } from 'react';
 import { useMsal } from '@azure/msal-react';
+import type { AccountInfo } from '@azure/msal-browser';
 import type { AppState, AppAction } from '../types/appState';
 import { initialAppState } from '../types/appState';
 import { appReducer } from '../reducers/appReducer';
@@ -88,6 +89,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, []);
 
   // Memoize context value to prevent unnecessary re-renders
+  const contextValue = useMemo(() => ({ state, dispatch }), [state, dispatch]);
+
+  return (
+    <AppContext.Provider value={contextValue}>
+      {children}
+    </AppContext.Provider>
+  );
+};
+
+const MOCK_USER: AccountInfo = {
+  homeAccountId: 'mock-user',
+  localAccountId: 'mock-user',
+  environment: 'mock',
+  tenantId: '00000000-0000-0000-0000-000000000002',
+  username: 'dev@mock.local',
+  name: 'Dev User (Mock Mode)',
+};
+
+/**
+ * MockAppProvider is used when VITE_MOCK_MODE=true.
+ * Identical to AppProvider but does NOT call useMsal() — so it can be used
+ * without a real MsalProvider. Immediately dispatches AUTH_INITIALIZED with a
+ * stub user so the rest of the app sees the authenticated state.
+ */
+export const MockAppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [state, dispatch] = useReducer(reducerWithLogging, initialAppState);
+
+  useEffect(() => {
+    dispatch({ type: 'AUTH_INITIALIZED', user: MOCK_USER });
+  }, []);
+
+  useEffect(() => {
+    devLogger.log('🚀 MockAppProvider initialized (VITE_MOCK_MODE=true)');
+  }, []);
+
   const contextValue = useMemo(() => ({ state, dispatch }), [state, dispatch]);
 
   return (

@@ -29,10 +29,18 @@ import { useCallback, useMemo } from "react";
  * }
  * ```
  */
+const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === 'true';
+
 export const useAuth = () => {
+  // useMsal must be called unconditionally (hook rules).
+  // In mock mode MsalProvider is still in the tree (with placeholder credentials)
+  // so this call is safe — we just ignore its output.
   const { instance, accounts } = useMsal();
 
   const getAccessToken = useCallback(async (): Promise<string | null> => {
+    // Mock mode: return a stub token — never calls Azure AD
+    if (MOCK_MODE) return 'mock-token';
+
     if (accounts.length === 0) {
       return null;
     }
@@ -67,7 +75,7 @@ export const useAuth = () => {
 
   // Memoize computed values
   const isAuthenticated = useMemo(
-    () => accounts.length > 0,
+    () => MOCK_MODE || accounts.length > 0,
     [accounts.length]
   );
 
