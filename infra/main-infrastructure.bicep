@@ -64,11 +64,43 @@ module containerAppsEnvironment './core/host/container-apps-environment.bicep' =
   }
 }
 
+// Azure Storage Account for Projects table
+// Name: 'st' + 13-char unique token = 15 chars (within 3-24 limit, all lowercase alphanumeric)
+resource projectsStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: 'st${resourceToken}'
+  location: location
+  tags: allTags
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+// Storage Table Data Contributor — lets the managed identity read/write to tables
+// Role ID: 0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3
+resource storageTableRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(projectsStorage.id, managedIdentity.id, 'table-data-contributor')
+  scope: projectsStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output appInsightsConnectionString string = appInsights.outputs.connectionString
 output appInsightsFrontendConnectionString string = appInsightsFrontend.outputs.connectionString
 output containerRegistryName string = containerRegistry.outputs.name
 output containerRegistryLoginServer string = containerRegistry.outputs.loginServer
 output containerAppsEnvironmentId string = containerAppsEnvironment.outputs.id
+output storageTableEndpoint string = projectsStorage.properties.primaryEndpoints.table
 
 // User-assigned managed identity — created independently so its principalId
 // is available for both Entra FIC and Container App/ACR assignment without circular dependency.

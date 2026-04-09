@@ -554,6 +554,59 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
         },
       };
 
+    // === Projects Actions ===
+    case 'PROJECTS_LOADING':
+      return {
+        ...state,
+        projects: { ...state.projects, isLoading: true },
+      };
+
+    case 'PROJECTS_SET_LIST':
+      return {
+        ...state,
+        projects: { ...state.projects, list: action.projects, isLoading: false },
+      };
+
+    case 'PROJECTS_ADD':
+      return {
+        ...state,
+        projects: {
+          ...state.projects,
+          list: [action.project, ...state.projects.list],
+        },
+      };
+
+    case 'PROJECTS_UPDATE':
+      return {
+        ...state,
+        projects: {
+          ...state.projects,
+          list: state.projects.list.map(p =>
+            p.id === action.project.id ? action.project : p
+          ),
+        },
+      };
+
+    case 'PROJECTS_REMOVE':
+      return {
+        ...state,
+        projects: {
+          ...state.projects,
+          list: state.projects.list.filter(p => p.id !== action.projectId),
+          // Deselect if the removed project was active
+          selectedProjectId:
+            state.projects.selectedProjectId === action.projectId
+              ? null
+              : state.projects.selectedProjectId,
+        },
+      };
+
+    case 'PROJECTS_SELECT':
+      return {
+        ...state,
+        projects: { ...state.projects, selectedProjectId: action.projectId },
+      };
+
     default:
       // TypeScript ensures all actions are handled (exhaustiveness check)
       return state;

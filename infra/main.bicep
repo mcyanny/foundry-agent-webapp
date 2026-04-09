@@ -89,6 +89,7 @@ module app 'main-app.bicep' = {
     oboManagedIdentityClientId: infrastructure.outputs.managedIdentityClientId
     appInsightsConnectionString: infrastructure.outputs.appInsightsConnectionString
     appInsightsFrontendConnectionString: infrastructure.outputs.appInsightsFrontendConnectionString
+    storageTableEndpoint: infrastructure.outputs.storageTableEndpoint
   }
 }
 

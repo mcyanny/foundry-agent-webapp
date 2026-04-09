@@ -33,6 +33,11 @@ function createInitialState(): AppState {
       sidebarOpen: false,
       hasMore: false,
     },
+    projects: {
+      list: [],
+      selectedProjectId: null,
+      isLoading: false,
+    },
   };
 }
 

@@ -87,8 +87,41 @@
       }
     },
     {
+      "label": "Azurite: Table Storage",
+      "type": "shell",
+      "command": "npx",
+      "args": [
+        "azurite",
+        "--location", "${workspaceFolder}/.azurite",
+        "--tableHost", "127.0.0.1",
+        "--blobHost", "127.0.0.1",
+        "--queueHost", "127.0.0.1"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^(.*)$",
+          "file": 1,
+          "line": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Azurite",
+          "endsPattern": "Azurite Table service is successfully listening"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "dev-servers",
+        "echo": true,
+        "showReuseMessage": false
+      }
+    },
+    {
       "label": "Start Dev (VS Code Terminals)",
-      "dependsOn": ["Backend: ASP.NET Core API", "Frontend: React Vite"],
+      "dependsOn": ["Azurite: Table Storage", "Backend: ASP.NET Core API", "Frontend: React Vite"],
       "dependsOrder": "parallel",
       "problemMatcher": [],
       "presentation": {

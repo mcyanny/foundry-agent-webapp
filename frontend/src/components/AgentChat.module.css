@@ -3,14 +3,21 @@
   height: 100vh;
   overflow: hidden;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   position: relative;
 }
 
 .mainContent {
   flex: 1;
   display: flex;
-  width: 100%;
+  min-width: 0;
   position: relative;
   overflow: hidden;
+}
+
+.sidebarToggle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
 }

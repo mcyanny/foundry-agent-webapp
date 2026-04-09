@@ -13,6 +13,8 @@ param userAssignedIdentityId string = ''
 param oboManagedIdentityClientId string = ''
 param appInsightsConnectionString string = ''
 param appInsightsFrontendConnectionString string = ''
+@description('Azure Table Storage endpoint for Projects service (https://<account>.table.core.windows.net)')
+param storageTableEndpoint string = ''
 
 var abbrs = loadJsonContent('./abbreviations.json')
 
@@ -68,7 +70,15 @@ var oboEnv = !empty(entraBackendClientId) ? [
   }
 ] : []
 
-var containerEnv = concat(baseEnv, miEnv, oboEnv)
+// Storage table endpoint — only injected when provisioned
+var storageEnv = !empty(storageTableEndpoint) ? [
+  {
+    name: 'AZURE_STORAGE_TABLE_ENDPOINT'
+    value: storageTableEndpoint
+  }
+] : []
+
+var containerEnv = concat(baseEnv, miEnv, oboEnv, storageEnv)
 
 // Single Container App - serves both frontend and backend
 module webApp './core/host/container-app.bicep' = {

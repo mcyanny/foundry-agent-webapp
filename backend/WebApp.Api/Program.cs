@@ -133,7 +133,19 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<AgentFrameworkService>();
 
+// Register Projects Service (Azure Table Storage)
+// Optional — degrades gracefully when storage is not configured.
+builder.Services.AddSingleton<ProjectsService>();
+
 var app = builder.Build();
+
+// Initialize Projects table at startup (no-op if storage not configured)
+using (var scope = app.Services.CreateScope())
+{
+    var projectsSvc = scope.ServiceProvider.GetRequiredService<ProjectsService>();
+    if (projectsSvc.IsAvailable)
+        await projectsSvc.EnsureTableExistsAsync();
+}
 
 // Add exception handling middleware for production
 if (!app.Environment.IsDevelopment())
@@ -169,6 +181,7 @@ app.MapGet("/api/health", () => Results.Ok(new { status = "healthy" }))
 app.MapPost("/api/chat/stream", async (
     ChatRequest request,
     AgentFrameworkService agentService,
+    ProjectsService projectsService,
     HttpContext httpContext,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
@@ -179,8 +192,21 @@ app.MapPost("/api/chat/stream", async (
         httpContext.Response.Headers.Append("Cache-Control", "no-cache");
         httpContext.Response.Headers.Append("Connection", "keep-alive");
 
+        // Resolve project context if projectId is provided
+        string? projectInstructions = null;
+        string? projectVectorStoreId = null;
+        if (!string.IsNullOrEmpty(request.ProjectId) && projectsService.IsAvailable)
+        {
+            var project = await projectsService.GetProjectAsync(request.ProjectId, cancellationToken);
+            if (project is not null)
+            {
+                projectInstructions = string.IsNullOrWhiteSpace(project.Instructions) ? null : project.Instructions;
+                projectVectorStoreId = string.IsNullOrWhiteSpace(project.VectorStoreId) ? null : project.VectorStoreId;
+            }
+        }
+
         var conversationId = request.ConversationId
-            ?? await agentService.CreateConversationAsync(request.Message, cancellationToken);
+            ?? await agentService.CreateConversationAsync(request.Message, request.ProjectId, cancellationToken);
 
         await WriteConversationIdEvent(httpContext.Response, conversationId, cancellationToken);
 
@@ -193,6 +219,8 @@ app.MapPost("/api/chat/stream", async (
             request.FileDataUris,
             request.PreviousResponseId,
             request.McpApproval,
+            projectInstructions,
+            projectVectorStoreId,
             cancellationToken))
         {
             if (chunk.IsText && chunk.TextDelta != null)
@@ -413,6 +441,7 @@ app.MapGet("/api/conversations", async (
     AgentFrameworkService agentService,
     IHostEnvironment environment,
     int? limit,
+    string? projectId,
     CancellationToken cancellationToken) =>
 {
     // MI mode: conversations are agent-scoped, not user-scoped.
@@ -421,7 +450,7 @@ app.MapGet("/api/conversations", async (
     try
     {
         var pageSize = Math.Clamp(limit ?? 20, 1, 100);
-        var conversations = await agentService.ListConversationsAsync(pageSize, cancellationToken);
+        var conversations = await agentService.ListConversationsAsync(pageSize, projectId, cancellationToken);
         var hasMore = conversations.Count > pageSize;
         if (hasMore)
             conversations = conversations.Take(pageSize).ToList();
@@ -539,6 +568,248 @@ app.MapGet("/api/files/{fileId}", async (
 })
 .RequireAuthorization(ScopePolicyName)
 .WithName("DownloadFile");
+
+// ── Projects API ─────────────────────────────────────────────────────────────
+// Returns 503 when AZURE_STORAGE_TABLE_ENDPOINT is not configured.
+
+static IResult ProjectsUnavailable() =>
+    Results.Problem(
+        title: "Projects not configured",
+        detail: "Set AZURE_STORAGE_TABLE_ENDPOINT (production) or " +
+                "AZURE_STORAGE_TABLE_CONNECTION_STRING (development) to enable Projects.",
+        statusCode: 503);
+
+// List all projects
+app.MapGet("/api/projects", async (
+    ProjectsService projectsService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    try
+    {
+        var projects = await projectsService.ListProjectsAsync(cancellationToken);
+        return Results.Ok(projects);
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("ListProjects");
+
+// Create a project (also creates its vector store)
+app.MapPost("/api/projects", async (
+    CreateProjectRequest request,
+    ProjectsService projectsService,
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    try
+    {
+        var vectorStoreId = await agentService.CreateVectorStoreAsync(
+            $"project-{request.Name}", cancellationToken);
+        var id = Guid.NewGuid().ToString("N");
+        var project = await projectsService.CreateProjectAsync(
+            id, request.Name, vectorStoreId,
+            request.Description ?? string.Empty,
+            request.Instructions ?? string.Empty,
+            cancellationToken);
+        return Results.Created($"/api/projects/{project.Id}", project);
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("CreateProject");
+
+// Get a single project
+app.MapGet("/api/projects/{id}", async (
+    string id,
+    ProjectsService projectsService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    try
+    {
+        var project = await projectsService.GetProjectAsync(id, cancellationToken);
+        return project is null ? Results.NotFound() : Results.Ok(project);
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("GetProject");
+
+// Update project name/instructions
+app.MapPatch("/api/projects/{id}", async (
+    string id,
+    UpdateProjectRequest request,
+    ProjectsService projectsService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    try
+    {
+        var project = await projectsService.UpdateProjectAsync(
+            id, request.Name, request.Description, request.Instructions, cancellationToken);
+        return project is null ? Results.NotFound() : Results.Ok(project);
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("UpdateProject");
+
+// Delete a project and its vector store
+app.MapDelete("/api/projects/{id}", async (
+    string id,
+    ProjectsService projectsService,
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    try
+    {
+        var project = await projectsService.GetProjectAsync(id, cancellationToken);
+        if (project is null) return Results.NotFound();
+
+        // Delete vector store first (best-effort)
+        try
+        {
+            if (!string.IsNullOrEmpty(project.VectorStoreId))
+                await agentService.DeleteVectorStoreAsync(project.VectorStoreId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't fail the delete if VS cleanup fails
+            var logger = app.Services.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning(ex, "Failed to delete vector store {VsId} for project {Id}",
+                project.VectorStoreId, id);
+        }
+
+        await projectsService.DeleteProjectAsync(id, cancellationToken);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("DeleteProject");
+
+// List files in a project's vector store
+app.MapGet("/api/projects/{id}/files", async (
+    string id,
+    ProjectsService projectsService,
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    try
+    {
+        var project = await projectsService.GetProjectAsync(id, cancellationToken);
+        if (project is null) return Results.NotFound();
+
+        var files = await agentService.ListVectorStoreFilesAsync(project.VectorStoreId, cancellationToken);
+        return Results.Ok(files);
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("ListProjectFiles");
+
+// Upload a file to a project's vector store
+app.MapPost("/api/projects/{id}/files", async (
+    string id,
+    IFormFile file,
+    ProjectsService projectsService,
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    if (file is null || file.Length == 0)
+        return Results.BadRequest(new { error = "No file provided" });
+    if (file.Length > 512 * 1024 * 1024) // 512 MB cap for vector store uploads
+        return Results.BadRequest(new { error = "File exceeds 512 MB limit" });
+
+    try
+    {
+        var project = await projectsService.GetProjectAsync(id, cancellationToken);
+        if (project is null) return Results.NotFound();
+
+        await using var stream = file.OpenReadStream();
+        var fileId = await agentService.UploadFileToVectorStoreAsync(
+            project.VectorStoreId, stream, file.FileName, cancellationToken);
+
+        return Results.Ok(new VectorStoreFileInfo
+        {
+            FileId = fileId,
+            FileName = file.FileName,
+            CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            FileSizeBytes = file.Length,
+        });
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.DisableAntiforgery()
+.WithName("UploadProjectFile");
+
+// Delete a file from a project's vector store
+app.MapDelete("/api/projects/{id}/files/{fileId}", async (
+    string id,
+    string fileId,
+    ProjectsService projectsService,
+    AgentFrameworkService agentService,
+    IHostEnvironment environment,
+    CancellationToken cancellationToken) =>
+{
+    if (!projectsService.IsAvailable) return ProjectsUnavailable();
+    try
+    {
+        var project = await projectsService.GetProjectAsync(id, cancellationToken);
+        if (project is null) return Results.NotFound();
+
+        await agentService.DeleteVectorStoreFileAsync(project.VectorStoreId, fileId, cancellationToken);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        var err = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
+        return Results.Problem(title: err.Title, detail: err.Detail, statusCode: err.Status);
+    }
+})
+.RequireAuthorization(ScopePolicyName)
+.WithName("DeleteProjectFile");
 
 // Fallback route for SPA - serve index.html for any non-API routes
 app.MapFallbackToFile("index.html");

@@ -37,6 +37,8 @@ public record ConversationSummary
     public required string Id { get; init; }
     public string? Title { get; init; }
     public long CreatedAt { get; init; }
+    /// <summary>null means uncategorized (no project).</summary>
+    public string? ProjectId { get; init; }
 }
 
 public record ConversationMessageInfo

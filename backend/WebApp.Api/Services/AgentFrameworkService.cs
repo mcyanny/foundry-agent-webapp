@@ -259,7 +259,7 @@ public class AgentFrameworkService : IDisposable
     /// <remarks>
     /// Uses direct ProjectResponsesClient instead of IChatClient because we need access to:
     /// - McpToolCallApprovalRequestItem for MCP approval flows
-    /// - FileSearchCallResponseItem for file search quotes  
+    /// - FileSearchCallResponseItem for file search quotes
     /// - MessageResponseItem.OutputTextAnnotations for citations
     /// The IChatClient abstraction doesn't expose these specialized response types.
     /// </remarks>
@@ -270,6 +270,8 @@ public class AgentFrameworkService : IDisposable
         List<FileAttachment>? fileDataUris = null,
         string? previousResponseId = null,
         McpApprovalResponse? mcpApproval = null,
+        string? additionalInstructions = null,
+        string? extraVectorStoreId = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -283,10 +285,29 @@ public class AgentFrameworkService : IDisposable
 
         CreateResponseOptions options = new() { StreamingEnabled = true };
 
+        // Inject project-level instructions as a system context message
+        // This prepends project instructions before the user message so the model
+        // applies them to every turn while inside a project conversation.
+        if (!string.IsNullOrWhiteSpace(additionalInstructions))
+        {
+            options.InputItems.Add(ResponseItem.CreateSystemMessageItem(
+                $"[Project Context]\n{additionalInstructions}"));
+            _logger.LogDebug("Injected project instructions ({Length} chars)", additionalInstructions.Length);
+        }
+
+        // Inject project vector store as an additional file search tool.
+        // The agent's existing tools (including its own file search) are still applied;
+        // this adds the project's vector store on top.
+        if (!string.IsNullOrWhiteSpace(extraVectorStoreId))
+        {
+            options.Tools.Add(ResponseTool.CreateFileSearchTool([extraVectorStoreId]));
+            _logger.LogDebug("Injected project vector store {VsId}", extraVectorStoreId);
+        }
+
         // Always bind to conversation — the conversation maintains MCP approval state
         ProjectResponsesClient responsesClient
             = GetProjectClient().OpenAI.GetProjectResponsesClientForAgent(
-                new AgentReference(_agentId, _agentVersion), 
+                new AgentReference(_agentId, _agentVersion),
                 conversationId);
 
         // If continuing from MCP approval, add approval response items
@@ -733,23 +754,32 @@ public class AgentFrameworkService : IDisposable
     /// Create a new conversation for the agent.
     /// Uses ProjectConversation from Azure.AI.Projects for server-managed state.
     /// </summary>
-    public async Task<string> CreateConversationAsync(string? firstMessage = null, CancellationToken cancellationToken = default)
+    public async Task<string> CreateConversationAsync(
+        string? firstMessage = null,
+        string? projectId = null,
+        CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         try
         {
-            _logger.LogInformation("Creating new conversation");
-            
+            _logger.LogInformation("Creating new conversation (projectId={ProjectId})", projectId ?? "none");
+
             ProjectConversationCreationOptions conversationOptions = new();
 
             if (!string.IsNullOrEmpty(firstMessage))
             {
                 // Store title in metadata (truncate to 50 chars)
-                var title = firstMessage.Length > 50 
+                var title = firstMessage.Length > 50
                     ? firstMessage[..50] + "..."
                     : firstMessage;
                 conversationOptions.Metadata["title"] = title;
+            }
+
+            // Tag conversation with project so it can be filtered later
+            if (!string.IsNullOrEmpty(projectId))
+            {
+                conversationOptions.Metadata["projectId"] = projectId;
             }
 
             ProjectConversation conversation
@@ -777,25 +807,40 @@ public class AgentFrameworkService : IDisposable
     /// <summary>
     /// List conversations for the current agent.
     /// </summary>
-    public async Task<List<ConversationSummary>> ListConversationsAsync(int limit = 20, CancellationToken cancellationToken = default)
+    /// <param name="limit">Maximum conversations to return.</param>
+    /// <param name="projectIdFilter">When set, only return conversations tagged with this project ID.</param>
+    public async Task<List<ConversationSummary>> ListConversationsAsync(
+        int limit = 20,
+        string? projectIdFilter = null,
+        CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         try
         {
-            _logger.LogInformation("Listing conversations (limit={Limit})", limit);
+            _logger.LogInformation("Listing conversations (limit={Limit}, project={Project})",
+                limit, projectIdFilter ?? "all");
 
             var conversations = new List<ConversationSummary>();
-            // Fetch limit+1 to detect if more conversations exist beyond the requested page
-            var fetchLimit = limit + 1;
+            // When filtering, fetch a large batch to find enough matching conversations.
+            // Foundry does not support server-side metadata filtering so we filter in-memory.
+            var fetchLimit = projectIdFilter is not null ? 500 : limit + 1;
+
             await foreach (var conv in GetProjectClient().OpenAI.Conversations.GetProjectConversationsAsync(
                 new AgentReference(_agentId, _agentVersion), cancellationToken: cancellationToken))
             {
+                var convProjectId = conv.Metadata?.TryGetValue("projectId", out var pid) == true ? pid : null;
+
+                // Apply project filter
+                if (projectIdFilter is not null && convProjectId != projectIdFilter)
+                    continue;
+
                 conversations.Add(new ConversationSummary
                 {
                     Id = conv.Id,
                     Title = conv.Metadata?.TryGetValue("title", out var title) == true ? title : null,
-                    CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
+                    CreatedAt = conv.CreatedAt.ToUnixTimeSeconds(),
+                    ProjectId = convProjectId,
                 });
 
                 if (conversations.Count >= fetchLimit)
@@ -1058,6 +1103,132 @@ public class AgentFrameworkService : IDisposable
     /// </summary>
     public (int InputTokens, int OutputTokens, int TotalTokens)? GetLastUsage() =>
         _lastUsage is null ? null : (_lastUsage.InputTokenCount, _lastUsage.OutputTokenCount, _lastUsage.TotalTokenCount);
+
+    // ── Vector Store Helpers ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Create a new Azure AI Foundry vector store for a project.
+    /// </summary>
+    public async Task<string> CreateVectorStoreAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _logger.LogInformation("Creating vector store: {Name}", name);
+        var vsClient = GetProjectClient().OpenAI.GetOpenAIVectorStoreClient();
+        var options = new OpenAI.VectorStores.VectorStoreCreationOptions { Name = name };
+        var result = await vsClient.CreateVectorStoreAsync(options, cancellationToken);
+        _logger.LogInformation("Created vector store: {VsId}", result.Value.VectorStoreId);
+        return result.Value.VectorStoreId;
+    }
+
+    /// <summary>
+    /// Delete a vector store and all its files.
+    /// </summary>
+    public async Task DeleteVectorStoreAsync(string vectorStoreId, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _logger.LogInformation("Deleting vector store: {VsId}", vectorStoreId);
+        var vsClient = GetProjectClient().OpenAI.GetOpenAIVectorStoreClient();
+        await vsClient.DeleteVectorStoreAsync(vectorStoreId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Upload a file to Azure AI Foundry and add it to the specified vector store.
+    /// Returns the file ID assigned by Foundry.
+    /// </summary>
+    public async Task<string> UploadFileToVectorStoreAsync(
+        string vectorStoreId,
+        Stream fileStream,
+        string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _logger.LogInformation("Uploading file '{FileName}' to vector store {VsId}", fileName, vectorStoreId);
+
+        var fileClient = GetProjectClient().OpenAI.GetOpenAIFileClient();
+        var uploadResult = await fileClient.UploadFileAsync(
+            fileStream,
+            fileName,
+            OpenAI.Files.FileUploadPurpose.Assistants,
+            cancellationToken);
+
+        var fileId = uploadResult.Value.Id;
+        _logger.LogInformation("Uploaded file {FileId}, adding to vector store", fileId);
+
+        var vsClient = GetProjectClient().OpenAI.GetOpenAIVectorStoreClient();
+        await vsClient.AddFileToVectorStoreAsync(
+            vectorStoreId,
+            fileId,
+            cancellationToken);
+
+        _logger.LogInformation("File {FileId} added to vector store {VsId}", fileId, vectorStoreId);
+        return fileId;
+    }
+
+    /// <summary>
+    /// List files in a vector store, cross-referencing with the Files API for filenames and sizes.
+    /// </summary>
+    public async Task<List<VectorStoreFileInfo>> ListVectorStoreFilesAsync(
+        string vectorStoreId,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _logger.LogInformation("Listing files in vector store {VsId}", vectorStoreId);
+
+        var vsClient = GetProjectClient().OpenAI.GetOpenAIVectorStoreClient();
+        var fileClient = GetProjectClient().OpenAI.GetOpenAIFileClient();
+
+        var results = new List<VectorStoreFileInfo>();
+        await foreach (var vsFile in vsClient.GetFileAssociationsAsync(vectorStoreId, cancellationToken: cancellationToken))
+        {
+            string fileName = vsFile.FileId;
+            long fileSize = 0;
+            try
+            {
+                var fileInfo = await fileClient.GetFileAsync(vsFile.FileId, cancellationToken);
+                fileName = fileInfo.Value?.Filename ?? vsFile.FileId;
+                fileSize = fileInfo.Value?.SizeInBytes ?? 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not fetch metadata for file {FileId}", vsFile.FileId);
+            }
+
+            results.Add(new VectorStoreFileInfo
+            {
+                FileId = vsFile.FileId,
+                FileName = fileName,
+                CreatedAt = vsFile.CreatedAt.ToUnixTimeSeconds(),
+                FileSizeBytes = fileSize,
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Remove a file from a vector store and delete it from Foundry storage.
+    /// </summary>
+    public async Task DeleteVectorStoreFileAsync(
+        string vectorStoreId,
+        string fileId,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _logger.LogInformation("Removing file {FileId} from vector store {VsId}", fileId, vectorStoreId);
+
+        var vsClient = GetProjectClient().OpenAI.GetOpenAIVectorStoreClient();
+        // Disassociate from vector store first
+        await vsClient.RemoveFileFromStoreAsync(vectorStoreId, fileId, cancellationToken);
+
+        // Then delete the file itself
+        var fileClient = GetProjectClient().OpenAI.GetOpenAIFileClient();
+        await fileClient.DeleteFileAsync(fileId, cancellationToken);
+    }
 
     public void Dispose()
     {

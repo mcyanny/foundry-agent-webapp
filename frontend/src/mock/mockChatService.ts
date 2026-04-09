@@ -1,5 +1,5 @@
 import type { Dispatch } from 'react';
-import type { AppAction, ConversationSummary, ConversationMessageInfo } from '../types/appState';
+import type { AppAction, ConversationSummary, ConversationMessageInfo, Project, VectorStoreFile } from '../types/appState';
 import type { IChatItem } from '../types/chat';
 import { ChatService } from '../services/chatService';
 
@@ -58,7 +58,8 @@ export class MockChatService extends ChatService {
   override async sendMessage(
     messageText: string,
     currentConversationId: string | null,
-    _files?: File[]
+    _files?: File[],
+    _projectId?: string | null
   ): Promise<void> {
     const userMessage: IChatItem = {
       id: Date.now().toString(),
@@ -132,6 +133,72 @@ export class MockChatService extends ChatService {
   }
 
   override async deleteConversation(_conversationId: string): Promise<void> {
+    // No-op in mock mode
+  }
+
+  // ── Mock project stubs ────────────────────────────────────────────────────
+
+  private mockProjects: Project[] = [
+    {
+      id: 'mock-project-1',
+      name: 'Demo Project',
+      description: 'A sample project for testing the projects feature.',
+      instructions: 'You are helping with a demo project. Be concise and helpful.',
+      vectorStoreId: 'mock-vs-1',
+      createdAt: Math.floor(Date.now() / 1000) - 86400,
+      fileCount: 0,
+    },
+  ];
+
+  override async listProjects(): Promise<Project[]> {
+    return [...this.mockProjects];
+  }
+
+  override async createProject(name: string, description?: string, instructions?: string): Promise<Project> {
+    const project: Project = {
+      id: `mock-project-${Date.now()}`,
+      name,
+      description: description ?? '',
+      instructions: instructions ?? '',
+      vectorStoreId: `mock-vs-${Date.now()}`,
+      createdAt: Math.floor(Date.now() / 1000),
+      fileCount: 0,
+    };
+    this.mockProjects.unshift(project);
+    return project;
+  }
+
+  override async updateProject(id: string, name?: string, description?: string, instructions?: string): Promise<Project> {
+    const idx = this.mockProjects.findIndex(p => p.id === id);
+    if (idx === -1) throw new Error('Project not found');
+    const updated = {
+      ...this.mockProjects[idx],
+      ...(name !== undefined && { name }),
+      ...(description !== undefined && { description }),
+      ...(instructions !== undefined && { instructions }),
+    };
+    this.mockProjects[idx] = updated;
+    return updated;
+  }
+
+  override async deleteProject(id: string): Promise<void> {
+    this.mockProjects = this.mockProjects.filter(p => p.id !== id);
+  }
+
+  override async listProjectFiles(_projectId: string): Promise<VectorStoreFile[]> {
+    return [];
+  }
+
+  override async uploadProjectFile(_projectId: string, file: File): Promise<VectorStoreFile> {
+    return {
+      fileId: `mock-file-${Date.now()}`,
+      fileName: file.name,
+      createdAt: Math.floor(Date.now() / 1000),
+      fileSizeBytes: file.size,
+    };
+  }
+
+  override async deleteProjectFile(_projectId: string, _fileId: string): Promise<void> {
     // No-op in mock mode
   }
 }

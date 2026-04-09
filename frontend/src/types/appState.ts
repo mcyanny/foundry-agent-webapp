@@ -9,6 +9,24 @@ export interface ConversationSummary {
   id: string;
   title: string | null;
   createdAt: number;
+  projectId?: string | null;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  vectorStoreId: string;
+  createdAt: number;
+  fileCount: number;
+}
+
+export interface VectorStoreFile {
+  fileId: string;
+  fileName: string;
+  createdAt: number;
+  fileSizeBytes: number;
 }
 
 export interface ConversationMessageInfo {
@@ -48,6 +66,13 @@ export interface AppState {
     isLoading: boolean;
     sidebarOpen: boolean;
     hasMore: boolean;
+  };
+
+  // Projects state
+  projects: {
+    list: Project[];
+    selectedProjectId: string | null; // null = show all (uncategorized) chats
+    isLoading: boolean;
   };
   
   // UI coordination state
@@ -97,7 +122,15 @@ export type AppAction =
   | { type: 'CONVERSATIONS_LOADING' }
   | { type: 'CONVERSATIONS_LOADING_DONE' }
   | { type: 'CONVERSATIONS_TOGGLE_SIDEBAR' }
-  | { type: 'CONVERSATIONS_REMOVE'; conversationId: string };
+  | { type: 'CONVERSATIONS_REMOVE'; conversationId: string }
+
+  // Project actions
+  | { type: 'PROJECTS_SET_LIST'; projects: Project[] }
+  | { type: 'PROJECTS_LOADING' }
+  | { type: 'PROJECTS_ADD'; project: Project }
+  | { type: 'PROJECTS_UPDATE'; project: Project }
+  | { type: 'PROJECTS_REMOVE'; projectId: string }
+  | { type: 'PROJECTS_SELECT'; projectId: string | null };
 
 /**
  * Initial state for the application
@@ -123,8 +156,13 @@ export const initialAppState: AppState = {
   conversations: {
     list: [],
     isLoading: false,
-    sidebarOpen: false,
+    sidebarOpen: true,
     hasMore: false,
+  },
+  projects: {
+    list: [],
+    selectedProjectId: null,
+    isLoading: false,
   },
   ui: {
     chatInputEnabled: true,

@@ -1,6 +1,6 @@
 import type { Dispatch } from 'react';
 import type { AppAction } from '../types/appState';
-import type { ConversationSummary, ConversationMessageInfo } from '../types/appState';
+import type { ConversationSummary, ConversationMessageInfo, Project, VectorStoreFile } from '../types/appState';
 import type { IChatItem } from '../types/chat';
 import type { AppError } from '../types/errors';
 import { isAppError } from '../types/errors';
@@ -133,13 +133,15 @@ export class ChatService {
     message: string,
     conversationId: string | null,
     imageDataUris: string[],
-    fileDataUris: Array<{ dataUri: string; fileName: string; mimeType: string }>
+    fileDataUris: Array<{ dataUri: string; fileName: string; mimeType: string }>,
+    projectId?: string | null
   ): Record<string, unknown> {
     return {
       message,
       conversationId,
       imageDataUris: imageDataUris.length > 0 ? imageDataUris : undefined,
       fileDataUris: fileDataUris.length > 0 ? fileDataUris : undefined,
+      projectId: projectId ?? undefined,
     };
   }
 
@@ -193,7 +195,8 @@ export class ChatService {
   async sendMessage(
     messageText: string,
     currentConversationId: string | null,
-    files?: File[]
+    files?: File[],
+    projectId?: string | null
   ): Promise<void> {
     if (this.currentStreamAbort) {
       this.streamCancelled = true;
@@ -244,7 +247,8 @@ export class ChatService {
       messageText,
       currentConversationId,
       imageDataUris,
-      fileDataUris
+      fileDataUris,
+      projectId
     );
 
     const maxRetries = 3;
@@ -657,6 +661,93 @@ export class ChatService {
 
     if (!response.ok) {
       throw createAppError(new Error(`Failed to delete conversation: ${response.status}`), 'API');
+    }
+  }
+
+  // ── Projects API ─────────────────────────────────────────────────────────
+
+  async listProjects(): Promise<Project[]> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/projects`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to list projects: ${response.status}`), 'API');
+    }
+    return response.json();
+  }
+
+  async createProject(name: string, description?: string, instructions?: string): Promise<Project> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, description: description ?? '', instructions: instructions ?? '' }),
+    });
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to create project: ${response.status}`), 'API');
+    }
+    return response.json();
+  }
+
+  async updateProject(id: string, name?: string, description?: string, instructions?: string): Promise<Project> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, description, instructions }),
+    });
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to update project: ${response.status}`), 'API');
+    }
+    return response.json();
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/projects/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok && response.status !== 404) {
+      throw createAppError(new Error(`Failed to delete project: ${response.status}`), 'API');
+    }
+  }
+
+  async listProjectFiles(projectId: string): Promise<VectorStoreFile[]> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/projects/${projectId}/files`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to list project files: ${response.status}`), 'API');
+    }
+    return response.json();
+  }
+
+  async uploadProjectFile(projectId: string, file: File): Promise<VectorStoreFile> {
+    const token = await this.ensureAuthToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(`${this.apiUrl}/projects/${projectId}/files`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    if (!response.ok) {
+      throw createAppError(new Error(`Failed to upload file: ${response.status}`), 'API');
+    }
+    return response.json();
+  }
+
+  async deleteProjectFile(projectId: string, fileId: string): Promise<void> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}/projects/${projectId}/files/${fileId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok && response.status !== 404) {
+      throw createAppError(new Error(`Failed to delete project file: ${response.status}`), 'API');
     }
   }
 }

@@ -5,6 +5,11 @@ public record ChatRequest
     public required string Message { get; init; }
     public string? ConversationId { get; init; }
     /// <summary>
+    /// Optional project ID. When set, injects project instructions and vector store into the stream.
+    /// Also tags the newly created conversation with this project.
+    /// </summary>
+    public string? ProjectId { get; init; }
+    /// <summary>
     /// Base64-encoded image data URIs (e.g., data:image/png;base64,iVBORw0KG...)
     /// Images are sent inline with the message, no file upload needed.
     /// </summary>
